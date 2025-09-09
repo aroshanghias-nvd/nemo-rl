@@ -26,7 +26,8 @@ loss_fn:
 
 checkpointing:
   enabled: true
-  checkpoint_dir: "results/clevr_grpo_${policy.model_name}"
+  # checkpoint_dir: "results/clevr_grpo_${policy.model_name}"
+  checkpoint_dir: "results/clevr_grpo_sft_nm_5p5_h_12b_cradio_0831_tiling_v1347"
   metric_name: "val_reward"
   higher_is_better: true
   keep_top_k: 3
@@ -34,7 +35,7 @@ checkpointing:
   checkpoint_must_save_by: null
 
 policy:
-  model_name: "Qwen/Qwen2.5-VL-3B-Instruct"
+  model_name: "./nano_vl_v2"
   tokenizer:
     name: ${policy.model_name} ## specify if you'd like to use a tokenizer different from the model's default
   train_global_batch_size: 128
@@ -49,7 +50,7 @@ policy:
     cpu_offload: False
     sequence_parallel: false
     activation_checkpointing: false
-    tensor_parallel_size: 1
+    tensor_parallel_size: 8
     context_parallel_size: 1
     custom_parallel_plan: null
 
@@ -172,5 +173,5 @@ logger:
     flush_interval: 10  # How often to flush GPU usage metrics to the loggers (in seconds)
 
 cluster:
-  gpus_per_node: 2
+  gpus_per_node: 8
   num_nodes: 1

@@ -59,6 +59,8 @@ from nemo_rl.models.generation import configure_generation_config
 from nemo_rl.utils.config import load_config, parse_hydra_overrides
 from nemo_rl.utils.logger import get_next_experiment_dir
 
+from nemo_rl.models import nemotron_h_nano_vl
+
 OmegaConf.register_new_resolver("mul", lambda a, b: a * b)
 
 
@@ -308,6 +310,9 @@ def setup_data(
 
 def main() -> None:
     """Main entry point."""
+    os.environ["NRL_VLLM_USE_V1"] = "0"  # VLM path only supports v0
+    nemotron_h_nano_vl.register()
+
     args, overrides = parse_args()
 
     if not args.config:

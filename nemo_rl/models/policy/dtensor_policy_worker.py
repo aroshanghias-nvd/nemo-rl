@@ -58,6 +58,7 @@ from nemo_rl.models.huggingface.common import (
     get_flash_attention_kwargs,
     pack_sequences,
 )
+from nemo_rl.models.nemotron_h_nano_vl import register as register_nemotron_h_nano_vl
 from nemo_rl.models.policy import PolicyConfig
 from nemo_rl.models.policy.interfaces import (
     LogprobOutputSpec,
@@ -157,6 +158,8 @@ class DTensorPolicyWorker:
         self.is_vlm = processor is not None
 
         print(f"Initializing DTensorPolicyWorker with is_vlm={self.is_vlm}")
+
+        register_nemotron_h_nano_vl()
 
         self.is_generation_colocated = None
         if "generation" in config and config["generation"] is not None:

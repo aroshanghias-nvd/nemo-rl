@@ -56,6 +56,8 @@ class ModelFlag(Enum):
 
 
 def is_gemma_model(model_name: str) -> bool:
+    # TODO(jseppanen): hardcoded for nemotron nano vl (AutoConfig.from_pretrained would need registration)
+    return False
     hf_config = AutoConfig.from_pretrained(model_name, trust_remote_code=True)
     return hasattr(hf_config, "model_type") and hf_config.model_type in [
         "gemma2",

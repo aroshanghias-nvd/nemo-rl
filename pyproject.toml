@@ -50,6 +50,10 @@ dependencies = [
     "torchvision>=0.22.0",
     "num2words>=0.5.14",   # for SmolVLM
     "mlflow",
+    "mamba-ssm",
+    "causal-conv1d",
+    "open-clip-torch",
+    "timm",
 ]
 
 [project.optional-dependencies]
