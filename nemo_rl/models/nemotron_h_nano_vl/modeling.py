@@ -13,12 +13,11 @@ import transformers
 from torch import nn
 from torch.nn import CrossEntropyLoss
 from transformers import AutoModel, AutoModelForCausalLM, GenerationConfig
-from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.modeling_utils import PreTrainedModel
 from transformers.utils import logging
 
 from .configuration import NemotronH_Nano_VL_V2_Config
-from .modeling_nemotron_h import NemotronHForCausalLM
+from .modeling_nemotron_h import HybridMambaAttentionDynamicCache, NemotronHCausalLMOutput
 
 logger = logging.get_logger(__name__)
 
@@ -102,7 +101,7 @@ class NemotronH_Nano_VL_V2(PreTrainedModel):
         )
         self.mlp1 = self.mlp1.to(self.language_model.config.torch_dtype)
 
-        self.img_context_token_id = None
+        self.img_context_token_id = self.config.image_context_token_id
 
     def forward(
             self,
@@ -111,14 +110,14 @@ class NemotronH_Nano_VL_V2(PreTrainedModel):
             attention_mask: Optional[torch.Tensor] = None,
             position_ids: Optional[torch.LongTensor] = None,
             image_flags: Optional[torch.LongTensor] = None,
-            past_key_values: Optional[List[torch.FloatTensor]] = None,
+            cache_params: Optional[HybridMambaAttentionDynamicCache] = None,
             labels: Optional[torch.LongTensor] = None,
             inputs_embeds = None,
             use_cache: Optional[bool] = None,
             output_attentions: Optional[bool] = None,
             output_hidden_states: Optional[bool] = None,
             return_dict: Optional[bool] = None,
-    ) -> Union[Tuple, CausalLMOutputWithPast]:
+    ) -> Union[Tuple, NemotronHCausalLMOutput]:
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         if inputs_embeds is None:
@@ -158,7 +157,7 @@ class NemotronH_Nano_VL_V2(PreTrainedModel):
             inputs_embeds=inputs_embeds,
             attention_mask=attention_mask,
             position_ids=position_ids,
-            past_key_values=past_key_values,
+            cache_params=cache_params,
             use_cache=use_cache,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
@@ -183,10 +182,10 @@ class NemotronH_Nano_VL_V2(PreTrainedModel):
             output = (logits,) + outputs[1:]
             return (loss,) + output if loss is not None else output
 
-        return CausalLMOutputWithPast(
+        return NemotronHCausalLMOutput(
             loss=loss,
             logits=logits,
-            past_key_values=outputs.past_key_values,
+            cache_params=outputs.cache_params,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
         )
@@ -214,7 +213,7 @@ class NemotronH_Nano_VL_V2(PreTrainedModel):
         vit_embeds = vit_embeds.reshape(vit_embeds.shape[0], h, w, -1)
         vit_embeds = self.pixel_shuffle(vit_embeds, scale_factor=self.downsample_ratio)
         vit_embeds = vit_embeds.reshape(vit_embeds.shape[0], -1, vit_embeds.shape[-1])
-        vit_embeds = self.mlp1(vit_embeds)
+        vit_embeds = self.mlp1(vit_embeds).to(torch.bfloat16)
         return vit_embeds
 
     def chat(
@@ -228,8 +227,6 @@ class NemotronH_Nano_VL_V2(PreTrainedModel):
         img_end_token='</img>',
         img_context_token='<image>',
     ):
-        img_context_token_id = tokenizer.convert_tokens_to_ids(img_context_token)
-        self.img_context_token_id = img_context_token_id
         eos_token_id = tokenizer.eos_token_id
 
         query = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
@@ -274,7 +271,6 @@ class NemotronH_Nano_VL_V2(PreTrainedModel):
             return_dict: Optional[bool] = None,
             **generate_kwargs,
     ) -> torch.LongTensor:
-        assert self.img_context_token_id is not None
         if pixel_values is not None:
             if visual_features is not None:
                 vit_embeds = visual_features.cuda()

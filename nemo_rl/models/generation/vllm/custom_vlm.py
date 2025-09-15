@@ -386,6 +386,7 @@ class CustomProcessor(BaseCustomProcessor):
         
         text_inputs = self.tokenizer(text, add_special_tokens=False)
 
+        # TODO(jseppanen): CustomProcessor did not return `BatchFeature`. Make sure to match the behaviour of `ProcessorMixin` when implementing custom processors.
         return {
             **BatchEncoding(text_inputs, tensor_type=return_tensors),
             **image_inputs,
@@ -842,7 +843,6 @@ class NemotronH_Nano_VL_V2(nn.Module, HasInnerState, IsHybrid, SupportsMultiModa
                                                   intermediate_tensors,
                                                   inputs_embeds)
 
-        # TODO(jseppanen): CustomProcessor did not return `BatchFeature`. Make sure to match the behaviour of `ProcessorMixin` when implementing custom processors.
         return hidden_states
 
     def get_mm_mapping(self) -> MultiModelKeys:

@@ -12,13 +12,25 @@ import torchvision.transforms as T
 
 
 class NemotronNanoVLV2ImageProcessor(BaseImageProcessorFast):
-    model_input_names = ["pixel_values"]
+    model_input_names = ["pixel_values", "image_flags"]
 
-    def __init__(self, image_size=512, max_num_tiles=12, use_thumbnail=True, norm_mean=None, norm_std=None, do_rescale=True, **kwargs):
+    def __init__(self,
+        image_size=512,
+        patch_size=16,
+        max_num_tiles=12,
+        use_thumbnail=True,
+        downsample_ratio=0.5,
+        norm_mean=None,
+        norm_std=None,
+        do_rescale=True,
+        **kwargs
+    ):
         super().__init__(**kwargs)
         self.image_size = image_size
+        self.patch_size = patch_size
         self.max_num_tiles = max_num_tiles
         self.use_thumbnail = use_thumbnail
+        self.downsample_ratio = downsample_ratio
         self.norm_mean = norm_mean
         self.norm_std = norm_std
         self.do_rescale = do_rescale
@@ -61,7 +73,12 @@ class NemotronNanoVLV2ImageProcessor(BaseImageProcessorFast):
         norm_mean = torch.Tensor(self.norm_mean).view(1, 3, 1, 1)
         norm_std = torch.Tensor(self.norm_std).view(1, 3, 1, 1)
         pixel_values = (pixel_values - norm_mean) / norm_std
-        return BatchFeature(data={"pixel_values": pixel_values, "num_patches": num_patches}, tensor_type=return_tensors)
+        image_inputs = {
+            "pixel_values": pixel_values,
+            "image_flags": torch.ones(pixel_values.shape[0], 1, dtype=torch.long),
+            "num_patches": torch.tensor(num_patches),
+        }
+        return BatchFeature(data=image_inputs, tensor_type=return_tensors)
 
 
 def get_internvl_target_ratios(
@@ -111,9 +128,9 @@ def calculate_targets(
     # calculate the target width and height
     target_width = image_size * target_aspect_ratio[0]
     target_height = image_size * target_aspect_ratio[1]
-    blocks = target_aspect_ratio[0] * target_aspect_ratio[1]
+    tiles = target_aspect_ratio[0] * target_aspect_ratio[1]
 
-    return blocks, target_width, target_height
+    return tiles, target_width, target_height
 
 
 def dynamic_preprocess(image, image_size=512, max_num_tiles=12, use_thumbnail=True):
