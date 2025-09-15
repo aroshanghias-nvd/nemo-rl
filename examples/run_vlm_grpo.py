@@ -44,6 +44,10 @@ from nemo_rl.data.interfaces import (
     TaskDataProcessFnCallable,
     TaskDataSpec,
 )
+from nemo_rl.data.hf_datasets.vision_r1 import (
+    VisionR1Dataset,
+    format_vision_r1_dataset,
+)
 from nemo_rl.data.multimodal_utils import (
     PackedTensor,
     get_dim_to_pack_along,
@@ -122,6 +126,8 @@ def hf_data_processor(
         datum_dict = format_refcoco_dataset(datum_dict)
     elif task_data_spec.task_name == "geometry3k":
         datum_dict = format_geometry3k_dataset(datum_dict)
+    elif task_data_spec.task_name == "vision_r1":
+        datum_dict = format_vision_r1_dataset(datum_dict)
     else:
         raise ValueError(f"No data processor for task {task_data_spec.task_name}")
 
@@ -256,6 +262,10 @@ def setup_data(
         )
     elif data_config["dataset_name"] == "geometry3k":
         data: Any = Geometry3KDataset(
+            split=data_config["split"],
+        )
+    elif data_config["dataset_name"] == "vision_r1":
+        data: Any = VisionR1Dataset(
             split=data_config["split"],
         )
     else:

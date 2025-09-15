@@ -171,3 +171,61 @@ def combine_reward_functions(
         return np.sum(np.array(rewards) * weights), is_correct
 
     return combined_reward_func
+
+def vision_r1_reward(
+    ground_truth: str,
+    response: str,
+    format_reward: float = 0.5,
+    correct_reward: float = 1.0,
+) -> tuple[float, bool]:
+    """Reward function for the Vision-R1 task.
+
+    Inputs:
+        - ground_truth: str - The correct answer (e.g., "A", "42", or a mathematical expression).
+        - response: str - The model's response containing <answer> tags.
+        - format_reward: float - Reward for correct format but incorrect answer (default 0.5).
+        - correct_reward: float - Reward for correct answer (default 1.0).
+
+    Outputs:
+        - tuple[float, bool]: (reward_score, is_correct)
+            - reward_score: float - The computed reward.
+            - is_correct: bool - True if the answer is correct, False otherwise.
+
+    Based on empirical analysis of Vision-R1 answers:
+    - 66% multiple choice (A-E only)
+    - 30% integers/decimals
+    - 4% mathematical expressions
+    """
+    # Extract answer from <answer> tags
+    pattern = r'<answer>(.*?)</answer>'
+    matches = list(re.finditer(pattern, response, re.DOTALL))
+    if matches:
+        # Take the last match if multiple answers
+        final_answer = matches[-1].group(1).strip()
+    else:
+        # Did not format the answer correctly
+        return 0.0, False
+
+    golden_answer = str(ground_truth).strip()
+
+    # Special handling for multiple choice (A-E only)
+    if golden_answer.upper() in ['A', 'B', 'C', 'D', 'E']:
+        if final_answer.upper() == golden_answer.upper():
+            return correct_reward, True
+        else:
+            # For multiple choice, we're strict - must be exact letter match
+            return format_reward, False
+
+    # For all other answers, use math_verify
+    try:
+        from math_verify import parse, verify
+        parsed_answer = parse(final_answer)
+        correct_answer = verify(golden_answer, parsed_answer)
+        if correct_answer:
+            return correct_reward, True
+    except Exception:
+        # math_verify couldn't parse - try exact string match as fallback
+        if final_answer.lower() == golden_answer.lower():
+            return correct_reward, True
+
+    return format_reward, False
