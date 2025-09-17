@@ -136,8 +136,8 @@ class NemotronH_Nano_VL_V2(PreTrainedModel):
 
         del pixel_values
 
-        if torch.distributed.get_rank() == 0:
-            print(f'dynamic ViT batch size: {vit_batch_size}, images per sample: {vit_batch_size / B}, dynamic token length: {N}')
+        # if torch.distributed.get_rank() == 0:
+        #     print(f'dynamic ViT batch size: {vit_batch_size}, images per sample: {vit_batch_size / B}, dynamic token length: {N}')
 
         vit_embeds = vit_embeds[image_flags == 1]
         try:

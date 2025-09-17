@@ -505,6 +505,9 @@ class CustomMultiModalProcessor(BaseMultiModalProcessor[CustomProcessingInfo]):
         tok_kwargs: Mapping[str, object],
     ) -> Mapping[str, NestedTensors]:
 
+        # TODO(jseppanen) workaround for WARNING The following intended overrides are not keyword args and will be dropped: {'truncation'}
+        mm_kwargs.pop("truncation", None)
+        tok_kwargs.pop("truncation", None)
         processed_outputs = super()._call_hf_processor(
             prompt=prompt,
             mm_data=mm_data,
@@ -640,6 +643,17 @@ class NemotronH_Nano_VL_V2(nn.Module, HasInnerState, IsHybrid, SupportsMultiModa
             hf_config=config.text_config,
             prefix=maybe_prefix(prefix, "language_model"),
         )
+
+        # init mamba_cache here to have it end up in vllm worker "weights" allocator, so that sleep works
+        assert not envs.VLLM_USE_V1, "vLLM V1 is not supported for NemotronH_Nano_VL_V2"
+        num_mamba_layers = self.language_model.model_config.get_num_layers_by_block_type(
+            self.language_model.vllm_config.parallel_config, LayerBlockType.mamba)
+        mamba_state_shape = NemotronHForCausalLM.get_mamba_state_shape_from_config(
+            self.language_model.vllm_config, use_v1=False)
+        self.language_model.mamba_cache = MambaCacheManager(
+            self.language_model.vllm_config, self.language_model.lm_head.weight.dtype, num_mamba_layers,
+            *mamba_state_shape)
+
         self.vision_model = AutoModel.from_config(config.vision_config, trust_remote_code=True)
         self.vision_model.model._initialize_weights = self.vision_model.model._init_weights
         # Move input normalization to processor to mirror origial HF implementation where norm is done on fp32
@@ -826,15 +840,6 @@ class NemotronH_Nano_VL_V2(nn.Module, HasInnerState, IsHybrid, SupportsMultiModa
                                                       vision_embeddings)
             input_ids = None
 
-        if self.language_model.mamba_cache is None:
-            assert not envs.VLLM_USE_V1, "vLLM V1 is not supported for NemotronH_Nano_VL_V2"
-            num_mamba_layers = self.language_model.model_config.get_num_layers_by_block_type(
-                self.language_model.vllm_config.parallel_config, LayerBlockType.mamba)
-            mamba_state_shape = NemotronHForCausalLM.get_mamba_state_shape_from_config(
-                self.language_model.vllm_config, use_v1=False)
-            self.language_model.mamba_cache = MambaCacheManager(
-                self.language_model.vllm_config, self.language_model.lm_head.weight.dtype, num_mamba_layers,
-                *mamba_state_shape)
         mamba_cache_params = self.language_model.mamba_cache.current_run_tensors(**kwargs)
 
         hidden_states = self.language_model.model(input_ids,
