@@ -61,7 +61,7 @@ def format_vision_r1_dataset(
         },
         {
             "type": "text",
-            "text": str(example["problem"]),
+            "text": str(example["problem"]).replace("<image>", ""),
         },
     ]
 
