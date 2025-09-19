@@ -123,35 +123,36 @@ class NemotronH_Nano_VL_V2(PreTrainedModel):
         if inputs_embeds is None:
             inputs_embeds = self.language_model.get_input_embeddings()(input_ids)
 
-        image_flags = image_flags.squeeze(-1)
+        if image_flags is not None:
+            image_flags = image_flags.squeeze(-1)
 
-        B, N, C = inputs_embeds.shape
-        inputs_embeds = inputs_embeds.reshape(B * N, C)
+            B, N, C = inputs_embeds.shape
+            inputs_embeds = inputs_embeds.reshape(B * N, C)
 
-        input_ids = input_ids.reshape(B * N)
-        selected = (input_ids == self.img_context_token_id)
+            input_ids = input_ids.reshape(B * N)
+            selected = (input_ids == self.img_context_token_id)
 
-        vit_batch_size = pixel_values.shape[0]
-        vit_embeds = self.extract_feature(pixel_values)
+            vit_batch_size = pixel_values.shape[0]
+            vit_embeds = self.extract_feature(pixel_values)
 
-        del pixel_values
+            del pixel_values
 
-        # if torch.distributed.get_rank() == 0:
-        #     print(f'dynamic ViT batch size: {vit_batch_size}, images per sample: {vit_batch_size / B}, dynamic token length: {N}')
+            # if torch.distributed.get_rank() == 0:
+            #     print(f'dynamic ViT batch size: {vit_batch_size}, images per sample: {vit_batch_size / B}, dynamic token length: {N}')
 
-        vit_embeds = vit_embeds[image_flags == 1]
-        try:
-            inputs_embeds[selected] = inputs_embeds[selected] * 0.0 + vit_embeds.reshape(-1, C)
-        except Exception as e:
-            vit_embeds = vit_embeds.reshape(-1, C)
-            print(f'warning: {e}, inputs_embeds[selected].shape={inputs_embeds[selected].shape}, '
-                  f'vit_embeds.shape={vit_embeds.shape}')
-            n_token = selected.sum()
-            inputs_embeds[selected] = inputs_embeds[selected] * 0.0 + vit_embeds[:n_token]
+            vit_embeds = vit_embeds[image_flags == 1]
+            try:
+                inputs_embeds[selected] = inputs_embeds[selected] * 0.0 + vit_embeds.reshape(-1, C)
+            except Exception as e:
+                vit_embeds = vit_embeds.reshape(-1, C)
+                print(f'warning: {e}, inputs_embeds[selected].shape={inputs_embeds[selected].shape}, '
+                    f'vit_embeds.shape={vit_embeds.shape}')
+                n_token = selected.sum()
+                inputs_embeds[selected] = inputs_embeds[selected] * 0.0 + vit_embeds[:n_token]
 
-        del vit_embeds
+            del vit_embeds
 
-        inputs_embeds = inputs_embeds.reshape(B, N, C)
+            inputs_embeds = inputs_embeds.reshape(B, N, C)
 
         outputs = self.language_model(
             inputs_embeds=inputs_embeds,
