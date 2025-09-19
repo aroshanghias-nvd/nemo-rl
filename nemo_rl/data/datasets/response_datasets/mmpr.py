@@ -18,7 +18,9 @@ from typing import Any, Optional
 
 from datasets import load_dataset
 from PIL import Image
-
+import json
+import os
+from datasets import Dataset
 from nemo_rl.data.interfaces import TaskDataSpec
 
 
@@ -56,20 +58,29 @@ def format_mmpr_dataset(
         pil_img = Image.open(example["image"]).convert("RGB")
     elif hasattr(example["image"], "convert"):  # already PIL
         pil_img = example["image"]
+    elif isinstance(example["image"], list):
+        pil_img = [Image.open(image).convert("RGB") for image in example["image"]]
     else:
         pil_img = Image.fromarray(example["image"]).convert("RGB")
 
     user_content = [
-        {
-            "type": "image",
-            "image": pil_to_base64(pil_img),
-        },
         {
             "type": "text",
             "text": str(example["question"]),
         },
     ]
 
+    if isinstance(pil_img, list):
+        for img in pil_img:
+            user_content.append({
+                "type": "image",
+                "image": pil_to_base64(img),
+            })
+    else:
+        user_content.append({
+            "type": "image",
+            "image": pil_to_base64(pil_img),
+        })
     # For DPO, we need both chosen and rejected responses
     # MMPR typically provides preference pairs
     chosen_content = str(example.get("chosen_response", example.get("chosen", "")))
@@ -92,24 +103,6 @@ def format_mmpr_dataset(
             },
         ],
     }
-    # ret = {
-    #     "messages": [
-    #         {"role": "user", "content": user_content},
-    #         {
-    #             "role": "assistant",
-    #             "content": chosen_content,
-    #             "rank": 0,  # Chosen response
-    #         },
-    #         {
-    #             "role": "assistant",
-    #             "content": rejected_content,
-    #             "rank": 1,  # Rejected response
-    #         },
-    #     ],
-    #     "task_name": "mmpr",
-    # }
-    # return ret
-
 
 def prepare_mmpr_dataset(
     split: str = "train", task_name: Optional[str] = None
@@ -124,31 +117,27 @@ def prepare_mmpr_dataset(
 
         # Try multiple loading strategies due to dataset structure complexity
         full_dataset = None
-        import json
-        import os
-        from datasets import Dataset
         with open(f"./MMPR-v1.1/meta.json", "r") as f:
             meta_data = json.load(f)
-        
+        dataset = []
         for dataset_name, dataset_info in meta_data.items():
-            if dataset_name == "ai2d_cap_gpt4o_en_20240410":
-                image_root = dataset_info["root"]
-                annotation_file = dataset_info["annotation"]
-                dataset = []
-                with open(annotation_file, "r") as f:
-                    for line in f:
-                        rec = json.loads(line)
-                        rec["image"] = os.path.join(image_root, rec["image"])
-                        dataset.append(rec)
+            image_root = dataset_info["root"]
+            annotation_file = dataset_info["annotation"]
+            with open(annotation_file, "r") as f:
+                for line in f:
+                    rec = json.loads(line)
+                    if isinstance(rec["image"], str):
+                        rec["image"] = [os.path.join(image_root, rec["image"])]
+                    else:
+                        rec["image"] = [os.path.join(image_root, image_path) for image_path in rec["image"]]
                         
-                    full_dataset = Dataset.from_list(dataset)
-
-        train_dataset = full_dataset
+                    dataset.append(rec)
+        full_dataset = Dataset.from_list(dataset)
         # Create a small validation set from train data
-        train_size = len(train_dataset)
-        val_size = min(500, train_size // 10)
-        val_dataset = train_dataset.select(range(val_size))
-        train_dataset = train_dataset.select(range(val_size, train_size))
+        train_size = len(full_dataset)
+        val_size = min(10000, train_size // 10)
+        val_dataset = full_dataset.select(range(val_size))
+        train_dataset = full_dataset.select(range(val_size, train_size))
 
         print(f"Successfully loaded MMPR dataset with {len(train_dataset)} training samples")
 

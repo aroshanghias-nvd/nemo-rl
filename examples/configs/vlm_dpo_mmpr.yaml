@@ -166,14 +166,14 @@ training:
 
 logger:
   log_dir: "logs"  # Base directory for all logs
-  wandb_enabled: false # Make sure you do a ``wandb login [Your API key]'' before running
+  wandb_enabled: true # Make sure you do a ``wandb login [Your API key]'' before running
 
   tensorboard_enabled: false
   mlflow_enabled: false  # Disable MLflow logging
   monitor_gpus: true  # If true, will monitor GPU usage and log to wandb and/or tensorboard
   num_val_samples_to_print: 0 # Number of validation samples to pretty print on terminal
   wandb:
-    project: "dpo-dev"
+    project: "dpo-dev-mmpr"
     name: "dpo"
   tensorboard:
     log_dir: "tb_logs-dpo-dev"
@@ -195,5 +195,5 @@ checkpointing:
   metric_name: "val_loss"
   higher_is_better: false
   keep_top_k: 3
-  save_period: 50
+  save_period: 15
   checkpoint_must_save_by: null

@@ -1,5 +1,2 @@
-Please analyze the image and answer the question comprehensively and accurately.
-
-Question: {text}
-
 Provide a detailed response based on what you see in the image.
+{}
