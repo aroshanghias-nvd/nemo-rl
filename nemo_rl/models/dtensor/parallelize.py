@@ -489,30 +489,37 @@ def _parallelize_nm5_h_vl(
         "Custom parallel plan is not supported for NemotronH_Nano_VL_V2"
     )
 
-    model_tp_plan: dict[str, ParallelStyle] = {
+    llm_tp_plan: dict[str, ParallelStyle] = {
         "lm_head": ColwiseParallel(output_layouts=Shard(-1), use_local_output=False),
     }
 
-    mlp_tp_plan: dict[str, ParallelStyle] = {
+    llm_mlp_tp_plan: dict[str, ParallelStyle] = {
         "mixer.up_proj": ColwiseParallel(),
         "mixer.down_proj": RowwiseParallel(),
     }
 
+    vit_mlp_tp_plan: dict[str, ParallelStyle] = {
+        "mlp.fc1": ColwiseParallel(),
+        "mlp.fc2": RowwiseParallel(),
+    }
+
     llm_layers: torch.nn.ModuleList = model.language_model.backbone.layers
-    parallelize_module(model.language_model, tp_mesh, model_tp_plan)
+    parallelize_module(model.language_model, tp_mesh, llm_tp_plan)
 
     for layer in llm_layers:
         if layer.block_type == "mlp":
-            parallelize_module(layer, tp_mesh, mlp_tp_plan)
+            parallelize_module(layer, tp_mesh, llm_mlp_tp_plan)
 
     vit_layers = model.vision_model.model.blocks
+    for layer in vit_layers:
+        parallelize_module(layer, tp_mesh, vit_mlp_tp_plan)
 
     if activation_checkpointing:
         for i in range(len(llm_layers)):
             if llm_layers[i].block_type == "mlp":
                 llm_layers[i] = checkpoint_wrapper(llm_layers[i])
 
-            if llm_layers[i].block_type == "mamba":
+            elif llm_layers[i].block_type == "mamba":
                 llm_layers[i] = checkpoint_wrapper(llm_layers[i])
 
         for i in range(len(vit_layers)):
