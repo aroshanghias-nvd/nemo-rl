@@ -209,6 +209,7 @@ def hf_data_processor(
     length = sum(len(m["token_ids"]) for m in message_log)
     loss_multiplier = 1.0
     if length >= max_seq_length:
+        print(f"Discarding sample with length {length} >= {max_seq_length}")
         # Treat truncated messages as text only
         vllm_kwargs = {
             "vllm_content": None,
@@ -337,7 +338,7 @@ def main() -> None:
 
     if not args.config:
         args.config = os.path.join(
-            os.path.dirname(__file__), "configs", "vlm_grpo_3B.yaml"
+            os.path.dirname(__file__), "configs", "vlm_grpo_3B_vision_r1.yaml"
         )
 
     config = load_config(args.config)
