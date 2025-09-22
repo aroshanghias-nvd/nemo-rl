@@ -27,12 +27,12 @@ loss_fn:
 
 checkpointing:
   enabled: true
-  checkpoint_dir: "results/vision_r1_grpo_${policy.model_name}"
+  checkpoint_dir: "results/vision_r1_grpo_${policy.model_name}_dev"
   metric_name: "val_reward"
   higher_is_better: true
   keep_top_k: 3
   save_period: 10
-  checkpoint_must_save_by: null
+  checkpoint_must_save_by: "00:03:45:00"  # assuming 4 hour slurm jobs
 
 policy:
   model_name: "nano_vl_v2"
@@ -150,7 +150,7 @@ logger:
   monitor_gpus: true  # If true, will monitor GPU usage and log to wandb and/or tensorboard
   wandb:
     project: "grpo-dev"
-    name: "nano-vl-v2-vision-r1"
+    name: "grpo-dev"
   tensorboard: {}
   gpu_monitoring:
     collection_interval: 10  # How often to collect GPU usage metrics (in seconds)
