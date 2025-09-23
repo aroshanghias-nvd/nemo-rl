@@ -1,3 +1,37 @@
+# How to train Nemotron-H Nano VL with Nemo-RL
+
+## Interactive development
+
+Start interactive job with `./interactive.sh` and wait for it to start. After it writes `$JOBID-attach.sh` script you can run it to open a terminal on the head node.
+
+Run training job interactively with:
+
+```sh
+uv run examples/run_vlm_grpo.py
+```
+
+This will run training with the default config from `examples/configs/vlm_grpo_3B_vision_r1.yaml`.
+
+For quicker turnaround during debugging you can use:
+
+```sh
+uv run examples/run_vlm_grpo.py grpo.num_prompts_per_step=2 grpo.num_generations_per_prompt=4 policy.train_global_batch_size=8 generation.vllm_cfg.enforce_eager=True
+```
+
+## Batch jobs
+
+Edit `batch.sh` as desired and then run it enough many times to start consecutive training jobs.
+
+```sh
+for x in $(seq 1 6); do ./batch.sh; done
+```
+
+## Interactive debugging
+
+I found the easiest to edit `ray.sub` to add `--dashboard-host=0.0.0.0` argument to `ray start` command, and then connect directly to the interactive session in Ray Debugger in Cursor (at `${NODE_IP}:8265`) and then follow https://docs.nvidia.com/nemo/rl/latest/debugging.html.
+
+---
+
 # Nemo RL: A Scalable and Efficient Post-Training Library
 
 ## 📣 News
