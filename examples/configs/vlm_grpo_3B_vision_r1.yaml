@@ -27,7 +27,7 @@ loss_fn:
 
 checkpointing:
   enabled: true
-  checkpoint_dir: "results/vision_r1_grpo_${policy.model_name}_dev"
+  checkpoint_dir: "results/grpo_nano_vl_vision_r1_dev"
   metric_name: "val_reward"
   higher_is_better: true
   keep_top_k: 3
@@ -35,14 +35,14 @@ checkpointing:
   checkpoint_must_save_by: "00:03:45:00"  # assuming 4 hour slurm jobs
 
 policy:
-  model_name: "nano_vl_v2"
+  model_name: "/lustre/fs1/portfolios/llmservice/users/jseppanen/checkpoints/nano_vl_v1347_nemorl"
   tokenizer:
     name: ${policy.model_name} ## specify if you'd like to use a tokenizer different from the model's default
   train_global_batch_size: 128
-  train_micro_batch_size: 1
+  train_micro_batch_size: 2
   generation_batch_size: 32 # Only used when generating using HF backend
-  logprob_batch_size: 4
-  max_total_sequence_length: 4096
+  logprob_batch_size: 2
+  max_total_sequence_length: 8192
   precision: "bfloat16"
 
   dtensor_cfg:
@@ -51,7 +51,7 @@ policy:
     cpu_offload: False
     sequence_parallel: false
     activation_checkpointing: true
-    tensor_parallel_size: 8
+    tensor_parallel_size: 1
     context_parallel_size: 1
     custom_parallel_plan: null
 
@@ -112,7 +112,7 @@ policy:
       tensor_parallel_size: 1
       pipeline_parallel_size: 1
       enable_expert_parallel: false
-      gpu_memory_utilization: 0.6
+      gpu_memory_utilization: 0.8
       max_model_len: ${policy.max_total_sequence_length}
       enforce_eager: False
     colocated:
@@ -144,7 +144,7 @@ env:
 logger:
   log_dir: "logs"  # Base directory for all logs
   num_val_samples_to_print: 0 # Number of validation samples to pretty print on terminal
-  wandb_enabled: true
+  wandb_enabled: false
   tensorboard_enabled: true
   mlflow_enabled: false  # Disable MLflow logging
   monitor_gpus: true  # If true, will monitor GPU usage and log to wandb and/or tensorboard
