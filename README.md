@@ -14,7 +14,11 @@ Run training job interactively with:
 uv run examples/run_vlm_grpo.py
 ```
 
-This will run training with the default config from [examples/configs/vlm_grpo_3B_vision_r1.yaml](examples/configs/vlm_grpo_3B_vision_r1.yaml)
+This will run training with the default config from [examples/configs/vlm_grpo_3B_vision_r1.yaml](examples/configs/vlm_grpo_3B_vision_r1.yaml).
+
+> **NOTE:** The default initial model (`/lustre/fs1/portfolios/llmservice/users/jseppanen/checkpoints/nano_vl_v1347_nemorl`) has modifications
+> to its `config.json` that are currently needed for training in Nemo-RL. If you use and unmodified HF checkpoint, you might get import errors and/or
+> unpickling errors from Ray.
 
 For quicker turnaround during debugging you can use:
 
