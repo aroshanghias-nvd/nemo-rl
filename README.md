@@ -2,7 +2,11 @@
 
 ## Interactive development
 
-Start interactive job with `./interactive.sh` and wait for it to start. After it writes `$JOBID-attach.sh` script you can run it to open a terminal on the head node.
+Start interactive job with [interactive.sh](interactive.sh) and wait for it to start. After it writes `$JOBID-attach.sh` script you can run it to open a terminal on the head node.
+
+```sh
+./2087639-attach.sh
+```
 
 Run training job interactively with:
 
@@ -10,7 +14,7 @@ Run training job interactively with:
 uv run examples/run_vlm_grpo.py
 ```
 
-This will run training with the default config from `examples/configs/vlm_grpo_3B_vision_r1.yaml`.
+This will run training with the default config from [examples/configs/vlm_grpo_3B_vision_r1.yaml](examples/configs/vlm_grpo_3B_vision_r1.yaml)
 
 For quicker turnaround during debugging you can use:
 
@@ -20,7 +24,7 @@ uv run examples/run_vlm_grpo.py grpo.num_prompts_per_step=2 grpo.num_generations
 
 ## Batch jobs
 
-Edit `batch.sh` as desired and then run it enough many times to start consecutive training jobs.
+Edit [batch.sh](batch.sh) as desired and then run it enough many times to start consecutive training jobs.
 
 ```sh
 for x in $(seq 1 6); do ./batch.sh; done
@@ -28,7 +32,7 @@ for x in $(seq 1 6); do ./batch.sh; done
 
 ## Interactive debugging
 
-I found the easiest to edit `ray.sub` to add `--dashboard-host=0.0.0.0` argument to `ray start` command, and then connect directly to the interactive session in Ray Debugger in Cursor (at `${NODE_IP}:8265`) and then follow https://docs.nvidia.com/nemo/rl/latest/debugging.html.
+I found the easiest to edit [ray.sub](ray.sub) to add `--dashboard-host=0.0.0.0` argument to `ray start` command, and then connect directly to the interactive session in Ray Debugger in Cursor (at `${NODE_IP}:8265`) and then follow https://docs.nvidia.com/nemo/rl/latest/debugging.html.
 
 ---
 
