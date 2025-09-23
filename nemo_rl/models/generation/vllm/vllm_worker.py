@@ -143,6 +143,12 @@ class BaseVllmGenerationWorker:
         # Store the Python executable being used by this worker
         self.py_executable = sys.executable
 
+        # Patch Mamba state to reduce token_mult_prob_error for Nemotron Nano VL v2;
+        # this can be replaced with policy.generation.vllm_kwargs.mamba_ssm_cache_dtype='float32'
+        # in vllm 0.10.2 and above
+        # https://github.com/vllm-project/vllm/commit/716750a9aba2dd185a8f5e7249a81b3bc833ecd9
+        _patch_vllm_mamba_ssd_state()
+
         # Skip model loading if we're not the model owner
         if not self.is_model_owner:
             self.llm = None
@@ -853,3 +859,29 @@ class VllmGenerationWorker(BaseVllmGenerationWorker):
         except Exception as e:
             print(f"Error during vLLM shutdown: {e}")
             return False
+
+
+def _patch_vllm_mamba_ssd_state():
+    base_path = "/opt/ray_venvs/nemo_rl.models.generation.vllm.vllm_worker.VllmGenerationWorker/lib/python3.12/site-packages/vllm"
+    ssd_path = f"{base_path}/model_executor/layers/mamba/ops/ssd_combined.py"
+    cache_path = f"{base_path}/model_executor/models/mamba_cache.py"
+
+    with open(ssd_path, "r") as f:
+        c = f.read()
+    if "out_dtype=torch.float32" not in c and "out_dtype=C.dtype" in c:
+        c = c.replace("out_dtype=C.dtype", "out_dtype=torch.float32")
+        with open(ssd_path, "w") as f:
+            f.write(c)
+
+    with open(cache_path, "r") as f:
+        c = f.read()
+    if "temporal_state = torch.empty" in c and "dtype=torch.float32" not in c:
+        idx = c.find("temporal_state = torch.empty")
+        end = c.find("device=", idx)
+        if idx != -1 and end != -1:
+            seg = c[idx:end]
+            if "dtype=dtype" in seg:
+                seg = seg.replace("dtype=dtype", "dtype=torch.float32")
+                c = c[:idx] + seg + c[end:]
+                with open(cache_path, "w") as f:
+                    f.write(c)
