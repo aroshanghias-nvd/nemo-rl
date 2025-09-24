@@ -2,7 +2,7 @@
 # Examplar script for running GRPO on Qwen2.5-VL-3B-Instruct
 grpo:
   num_prompts_per_step: 8
-  num_generations_per_prompt: 16
+  num_generations_per_prompt: 8
   max_rollout_turns: 1 # for multi-turn rollouts. Math Environments just have 1 turn (answering the question)
   max_num_epochs: 1
   max_num_steps: 1000000
@@ -18,7 +18,7 @@ grpo:
 loss_fn:
   reference_policy_kl_penalty: 0.01
   ratio_clip_min: 0.2
-  ratio_clip_max: 0.2
+  ratio_clip_max: 0.28
   ratio_clip_c: null
   # (default off) loss formulation improvements (docs/guides/grpo.md#loss)
   use_on_policy_kl_approximation: false
@@ -38,7 +38,9 @@ policy:
   model_name: "/lustre/fs1/portfolios/llmservice/users/jseppanen/checkpoints/nano_vl_v1347_nemorl"
   tokenizer:
     name: ${policy.model_name} ## specify if you'd like to use a tokenizer different from the model's default
-  train_global_batch_size: 128
+    # chat template used in SFT
+    chat_template: "{% for message in messages %}{% set content = message['content'] %}{% if message['role'] == 'system' %}{{ '<SPECIAL_10>System\n' + content.replace('/think', '').replace('/no_think', '').strip() + '\n' }}{% elif message['role'] == 'user' %}{{ '<SPECIAL_11>User\n' + content.replace('/think', '').replace('/no_think', '').strip() + '\n' }}{% elif message['role'] == 'assistant' %}{{ '<SPECIAL_11>Assistant\n' + content.strip() + '\n<SPECIAL_12>\n' }}{% endif %}{% endfor %}"
+  train_global_batch_size: 64
   train_micro_batch_size: 2
   generation_batch_size: 32 # Only used when generating using HF backend
   logprob_batch_size: 2
@@ -77,9 +79,9 @@ policy:
   optimizer:
     name: "torch.optim.AdamW"
     kwargs:
-      lr: 5e-7
-      weight_decay: 0.01
-      betas: [0.9, 0.999]
+      lr: 1e-6
+      weight_decay: 0.1
+      betas: [0.9, 0.95]
       eps: 1e-8
       # when using Dtensor, we need to set foreach
       # and fused to False
@@ -101,8 +103,8 @@ policy:
   generation:
     backend: "vllm"
     max_new_tokens: ${policy.max_total_sequence_length}
-    temperature: 1.0
-    top_p: 1.0
+    temperature: 0.7
+    top_p: 1.0  # NB. megatron-rl uses 0.9 but nemo-rl doesn't support top-p
     top_k: null
     stop_token_ids: null
     stop_strings: null
@@ -127,7 +129,7 @@ policy:
 data:
   max_input_seq_length: ${policy.max_total_sequence_length} # upper bound, real truncation occurs at vllm.max_model_len
   prompt_file: examples/prompts/vision_r1.txt
-  system_prompt_file: null
+  system_prompt_file: examples/prompts/vision_r1_system_prompt.txt
   dataset_name: "vision_r1"
   split: "train"
   shuffle: true
@@ -136,10 +138,8 @@ env:
   vision_r1:
     num_workers: 8
     reward_functions:
-      - name: format
-        weight: 0.1
       - name: vision_r1
-        weight: 0.9
+        weight: 1.0
 
 logger:
   log_dir: "logs"  # Base directory for all logs
