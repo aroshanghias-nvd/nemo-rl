@@ -1,5 +1,2 @@
-Think step-by-step to solve the following math problem, and answer in the following format: <think> step-by-step thought process </think> <answer> final answer </answer>.
-Your final answer must be a letter for multiple choice questions, otherwise return a number. Make sure to put the answer (and only answer) inside <answer> </answer>.
-
-Let's think step-by-step: 
 {}
+Please reason step by step and provide your answer between <answer> </answer> tags, for example <answer> 20\sqrt{{3}} </answer>. Do not include an = sign.
