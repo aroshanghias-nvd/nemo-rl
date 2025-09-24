@@ -131,6 +131,7 @@ def hf_data_processor(
 
     message_log: LLMMessageLogType = []
     ### only one round of interaction is assumed, this can easily be extended to a conversational setting
+    system_message = {"role": "system", "content": [{"type": "text", "text": task_data_spec.system_prompt}]}
     user_message = {"role": "user", "content": []}
     #
     images = []
@@ -159,45 +160,61 @@ def hf_data_processor(
 
     images = [resolve_to_image(image) for image in images]
 
-    # get formatted user message
+    # get formatted conversation messages
     if hasattr(processor, "conversation_preprocessor"):
+        system_message_for_chat_template = processor.conversation_preprocessor(
+            system_message
+        )
         user_message_for_chat_template = processor.conversation_preprocessor(
             user_message
         )
     else:
+        system_message_for_chat_template = system_message
         user_message_for_chat_template = user_message
 
     # this is the string-tokenized conversation template for the generation policy (for vllm)
     string_formatted_dialog = processor.apply_chat_template(
-        [user_message_for_chat_template],
+        [system_message_for_chat_template, user_message_for_chat_template],
         tokenize=False,
         add_generation_prompt=True,
     )
 
     # this is the id-tokenized and image processed conversation template for the policy
-    message: dict = processor.apply_chat_template(
-        [user_message],
+    message_sys: dict = processor.apply_chat_template(
+        [system_message],
+        tokenize=True,
+        add_generation_prompt=False,
+        return_tensors="pt",
+        return_dict=True,
+    )
+    message_both: dict = processor.apply_chat_template(
+        [system_message, user_message],
         tokenize=True,
         add_generation_prompt=True,
         return_tensors="pt",
         return_dict=True,
     )
 
-    # add this for backward compatibility
-    user_message["token_ids"] = message["input_ids"][0]
+    system_message["token_ids"] = message_sys["input_ids"][0]
+    sys_len = message_sys["input_ids"].shape[1]
+    user_message["token_ids"] = message_both["input_ids"][0][sys_len:]
     # add all keys and values to the user message, and the list of keys
     multimodal_keys = get_multimodal_keys_from_processor(processor)
     for key in multimodal_keys:
-        if key in message:
+        if key in message_both:
             user_message[key] = PackedTensor(
-                message[key], dim_to_pack=get_dim_to_pack_along(processor, key)
+                message_both[key], dim_to_pack=get_dim_to_pack_along(processor, key)
             )
 
     # specifically for gemma, we need to add token_type_ids to the user message as a sequence-type value
-    if "token_type_ids" in message:
-        user_message["token_type_ids"] = message["token_type_ids"][0]
+    if "token_type_ids" in message_both:
+        system_message["token_type_ids"] = message_sys["token_type_ids"][0]
+        user_message["token_type_ids"] = message_both["token_type_ids"][0][
+            sys_len:
+        ]
 
     ### append to user message
+    message_log.append(system_message)
     message_log.append(user_message)
 
     length = sum(len(m["token_ids"]) for m in message_log)
