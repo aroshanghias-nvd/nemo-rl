@@ -17,6 +17,7 @@ import argparse
 import yaml
 
 from nemo_rl.utils.native_checkpoint import convert_dcp_to_hf
+from nemo_rl.models import nemotron_h_nano_vl
 
 
 def parse_args():
@@ -57,6 +58,8 @@ def main():
     # This is more stable than relying on the current NeMo-RL get_tokenizer() which can
     # change release to release.
     tokenizer_name_or_path = config["policy"]["model_name"]
+
+    nemotron_h_nano_vl.register()
 
     hf_ckpt = convert_dcp_to_hf(
         dcp_ckpt_path=args.dcp_ckpt_path,
