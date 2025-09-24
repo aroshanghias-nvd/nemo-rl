@@ -49,9 +49,11 @@ class NemotronNanoVLV2Processor(ProcessorMixin):
         **kwargs
     ) -> BatchEncoding:
         text, images = [self._make_batch_input(x) for x in (text, images)]
-
-        image_inputs = self.image_processor(images)
-        text = self._add_image_placeholders(text, image_inputs)
+        if images:
+            image_inputs = self.image_processor(images)
+            text = self._add_image_placeholders(text, image_inputs)
+        else:
+            image_inputs = {}
         text_inputs = self.tokenizer(text, add_special_tokens=False)
         return BatchEncoding(
             data=dict(**text_inputs, **image_inputs), tensor_type=return_tensors
