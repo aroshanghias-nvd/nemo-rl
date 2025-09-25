@@ -37,6 +37,11 @@ class ClippedPGLossConfig(TypedDict):
     use_on_policy_kl_approximation: bool
     use_importance_sampling_correction: bool
     token_level_loss: bool
+    logprob_min: float
+    log_ratio_clip: float
+    kl_clip: float
+    loss_clip: float
+    entropy_weight: float
     # If True, apply the off-policy importance-sampling correction at the
     # sequence level (one weight per generated sample), as in GSPO.
     # If False (default), correction is applied at the token level as in the
@@ -115,6 +120,11 @@ class ClippedPGLossFn(LossFunction):
         self.loss_type = (
             LossType.TOKEN_LEVEL if cfg["token_level_loss"] else LossType.SEQUENCE_LEVEL
         )
+        self.logprob_min = cfg.get("logprob_min", -60.0)
+        self.log_ratio_clip = cfg.get("log_ratio_clip", 5.0)
+        self.kl_clip = cfg.get("kl_clip", 5.0)
+        self.loss_clip = cfg.get("loss_clip", 1e6)
+        self.entropy_weight = cfg.get("entropy_weight", 0.0)
         if self.sequence_level_importance_ratios:
             assert self.loss_type == LossType.SEQUENCE_LEVEL, (
                 "sequence-level importance sampling (e.g. GSPO) is mutually exclusive with token-level loss"
@@ -183,6 +193,10 @@ class ClippedPGLossFn(LossFunction):
                 dim=-1, index=next_tokens.unsqueeze(-1)
             ).squeeze(-1)
 
+        curr_logprobs = curr_logprobs.clip(min=self.logprob_min)
+        prev_logprobs = prev_logprobs.clip(min=self.logprob_min)
+        reference_policy_logprobs = reference_policy_logprobs.clip(min=self.logprob_min)
+
         # Calculate KL regularization.
         if self.reference_policy_kl_penalty != 0:
             if self.use_on_policy_kl_approximation:
@@ -201,6 +215,7 @@ class ClippedPGLossFn(LossFunction):
                 * calculate_kl_penalty_joschu2020(
                     logprobs_policy=curr_logprobs,
                     logprobs_reference=reference_policy_logprobs,
+                    kl_clip=self.kl_clip,
                 )
             )
             if self.loss_type == LossType.TOKEN_LEVEL:
@@ -219,6 +234,7 @@ class ClippedPGLossFn(LossFunction):
         # Calculate clipped loss function if ppo ratio is enabled.
         if not self.disable_ppo_ratio:
             log_ratios = curr_logprobs - prev_logprobs
+            log_ratios = log_ratios.clip(min=-self.log_ratio_clip, max=self.log_ratio_clip)
             if self.sequence_level_importance_ratios:
                 seq_log_ratio_mean = masked_mean(
                     log_ratios,
@@ -321,7 +337,26 @@ class ClippedPGLossFn(LossFunction):
                 global_normalization_factor=global_valid_toks,
             )
 
-        loss = actor_loss + kl
+        if self.entropy_weight != 0:
+            if self.loss_type == LossType.TOKEN_LEVEL:
+                entropy_loss = masked_mean(
+                    torch.exp(curr_logprobs) * curr_logprobs,
+                    mask,
+                    global_normalization_factor=global_valid_toks,
+                )
+            else:
+                entropy_loss = masked_mean(
+                    masked_mean(torch.exp(curr_logprobs) * curr_logprobs, token_mask, dim=-1),
+                    sample_mask,
+                    global_normalization_factor=global_valid_seqs,
+                )
+            entropy_loss = entropy_loss * self.entropy_weight
+        else:
+            entropy_loss = torch.tensor(0.0)
+
+        loss = actor_loss + kl + entropy_loss
+        loss = loss.clip(min=-self.loss_clip, max=self.loss_clip)
+
         with torch.no_grad():
             probs_ratio = masked_mean(
                 ratios.detach(),

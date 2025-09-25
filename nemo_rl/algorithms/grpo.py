@@ -648,9 +648,13 @@ def grpo_train(
                 if master_config["grpo"]["normalize_rewards"]:
                     # don't sharpen the ones with no variation
                     zero_std_mask = std > 0
+                    advantage_eps = master_config["grpo"].get("advantage_eps", 1e-3)
                     advantages[zero_std_mask] = (
-                        advantages[zero_std_mask] / std.unsqueeze(-1)[zero_std_mask]
+                        advantages[zero_std_mask] / (std.unsqueeze(-1)[zero_std_mask] + advantage_eps)
                     )
+
+                advantage_clip = master_config["grpo"].get("advantage_clip", 10.0)
+                advantages = torch.clamp(advantages, min=-advantage_clip, max=advantage_clip)
 
             with timer.time("data_processing"):
                 use_overlong_filtering = master_config["grpo"]["overlong_filtering"]

@@ -29,7 +29,7 @@ from nemo_rl.models.policy import TokenizerConfig
 
 
 def calculate_kl_penalty_joschu2020(
-    logprobs_policy: torch.Tensor, logprobs_reference: torch.Tensor
+    logprobs_policy: torch.Tensor, logprobs_reference: torch.Tensor, kl_clip: float = 1000.0
 ) -> torch.Tensor:
     """Calculates a per-token estimate of the KL Divergence between two log_probs.
 
@@ -39,6 +39,7 @@ def calculate_kl_penalty_joschu2020(
     logprobs_reference: torch.Tensor (b, s)
     """
     r = logprobs_reference - logprobs_policy
+    r = r.clip(min=-kl_clip, max=kl_clip)
     return torch.exp(r) - r - 1
 
 
