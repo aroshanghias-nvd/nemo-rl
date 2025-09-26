@@ -113,11 +113,11 @@ def prepare_mmpr_dataset(
 
     try:
         # Load the MMPR dataset from HuggingFace
-        print("Loading MMPR dataset from HuggingFace...")
+        print("Downloading MMPR dataset from HuggingFace...")
 
         # Try multiple loading strategies due to dataset structure complexity
         full_dataset = None
-        with open(f"./MMPR-v1.1/meta.json", "r") as f:
+        with open(f"./MMPR-v1.2/meta.json", "r") as f:
             meta_data = json.load(f)
         dataset = []
         for dataset_name, dataset_info in meta_data.items():
@@ -126,11 +126,16 @@ def prepare_mmpr_dataset(
             with open(annotation_file, "r") as f:
                 for line in f:
                     rec = json.loads(line)
+                    rec["question"] = rec["question"].replace("<image>", "")
+                    if "<think>" not in rec["chosen"]:
+                        rec["question"] = rec["question"] + " /no_think"
+                        rec["chosen"] = "<think></think>" + rec["chosen"] 
+                        rec["rejected"] = "<think></think>" +rec["rejected"]
                     if isinstance(rec["image"], str):
                         rec["image"] = [os.path.join(image_root, rec["image"])]
                     else:
                         rec["image"] = [os.path.join(image_root, image_path) for image_path in rec["image"]]
-                        
+
                     dataset.append(rec)
         full_dataset = Dataset.from_list(dataset)
         # Create a small validation set from train data
