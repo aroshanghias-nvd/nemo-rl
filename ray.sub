@@ -32,7 +32,9 @@ maybe_gres_arg() {
   # Assumes a homogeneous allocation (not a heterogeneous job)
   if sinfo -p $SLURM_JOB_PARTITION -h -o "%G" | grep -q "gpu:"; then
     # Do a quick assert here that gpus:8 == gpus:$GPUS_PER_NODE. It is probably a user error if someone isn't using GPUS_PER_NODE=8 on our clusters if it supports --gres=gpu:8 or gpu:a100:8
-    if [[ $GPUS_PER_NODE -ne $(sinfo -p $SLURM_JOB_PARTITION -h -o "%G" | grep "gpu:" | awk -F: '{print $NF}') ]]; then
+    # Extract GPU count from GRES strings like gpu:8, gpu:a100:8, gpu:8(S:0-1), etc.
+    DETECTED_GPUS=$(sinfo -p "$SLURM_JOB_PARTITION" -h -o "%G" | grep -oE 'gpu:[^, ]+' | sed -E 's/\(.*\)//; s/.*:([0-9]+).*/\1/' | head -1)
+    if [[ $GPUS_PER_NODE -ne $DETECTED_GPUS ]]; then
       echo "Error: GPUS_PER_NODE=$GPUS_PER_NODE but GRES detected is $(sinfo -p $SLURM_JOB_PARTITION -h -o "%G" | grep "gpu:") meaning GPUS_PER_NODE is not set to fully claim the GPUs on the nodes." >&2
       exit 1
     fi
