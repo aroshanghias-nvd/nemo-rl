@@ -13,6 +13,8 @@
 # limitations under the License.
 
 import argparse
+import os
+import shutil
 
 import yaml
 
@@ -67,6 +69,12 @@ def main():
         model_name_or_path=model_name_or_path,
         tokenizer_name_or_path=tokenizer_name_or_path,
     )
+
+    # copy extra *.jinja/*.json/*.py files
+    base_path = "/lustre/fs1/portfolios/llmservice/users/jseppanen/convert_dcp_to_hf_extras"
+    for file in os.listdir(base_path):
+        shutil.copyfile(f"{base_path}/{file}", f"{args.hf_ckpt_path}/{file}")
+
     print(f"Saved HF checkpoint to: {hf_ckpt}")
 
 
