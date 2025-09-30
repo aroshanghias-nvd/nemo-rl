@@ -4,9 +4,8 @@
 # --------------------------------------------------------
 
 
-import os
 import warnings
-from typing import List, Optional, Tuple, Union
+from typing import Optional, Tuple, Union
 
 import torch
 import transformers
@@ -102,6 +101,13 @@ class NemotronH_Nano_VL_V2(PreTrainedModel):
         self.mlp1 = self.mlp1.to(self.language_model.config.torch_dtype)
 
         self.img_context_token_id = self.config.image_context_token_id
+
+        for p in self.vision_model.parameters():
+            p.requires_grad = False
+        self.vision_model.eval()
+        for p in self.mlp1.parameters():
+            p.requires_grad = False
+        self.mlp1.eval()
 
     def forward(
             self,
@@ -217,6 +223,12 @@ class NemotronH_Nano_VL_V2(PreTrainedModel):
         vit_embeds = self.mlp1(vit_embeds).to(torch.bfloat16)
         return vit_embeds
 
+    def train(self, mode: bool = True):
+        super().train(mode)
+        self.vision_model.eval()
+        self.mlp1.eval()
+        return self
+
     def chat(
         self,
         tokenizer, 
@@ -288,9 +300,6 @@ class NemotronH_Nano_VL_V2(PreTrainedModel):
             inputs_embeds[selected] = vit_embeds.reshape(-1, C).to(inputs_embeds.device, inputs_embeds.dtype)
 
             inputs_embeds = inputs_embeds.reshape(B, N, C)
-            if False:
-                save_root = "_hf_save"
-                torch.save(inputs_embeds.cpu(), os.path.join(save_root, f"input_embeds_merged_embeds.pt"))
 
         else:
             inputs_embeds = self.language_model.get_input_embeddings()(input_ids)
