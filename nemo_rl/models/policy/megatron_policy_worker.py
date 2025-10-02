@@ -58,9 +58,10 @@ from megatron.bridge.training.utils.train_utils import (
     reduce_max_stat_across_model_parallel_group,
 )
 from megatron.bridge.utils.common_utils import get_rank_safe
+from megatron.bridge.utils.instantiate_utils import InstantiationMode
 from megatron.core import parallel_state
 from megatron.core.distributed import DistributedDataParallel
-from megatron.core.distributed.custom_fsdp import (
+from megatron.core.distributed.fsdp.mcore_fsdp_adapter import (
     FullyShardedDataParallel as custom_FSDP,
 )
 from megatron.core.inference.engines import (
@@ -233,6 +234,7 @@ def setup_megatron_model(
         make_vocab_size_divisible_by=cfg.model.make_vocab_size_divisible_by
         // cfg.model.tensor_model_parallel_size,
         tensor_model_parallel_size=cfg.model.tensor_model_parallel_size,
+        trust_remote_code=True,
     )
     if not cfg.model.vocab_size:
         cfg.model.vocab_size = cfg.tokenizer.padded_vocab_size
@@ -512,8 +514,8 @@ class MegatronPolicyWorker:
             )
 
         cfg_from_pretrained = ConfigContainer.from_yaml(
-            pretrained_run_config, mode=0
-        )  # strict loading
+            pretrained_run_config, mode=InstantiationMode.STRICT
+        )
         model_cfg = cfg_from_pretrained.model
         cfg_from_pretrained.logger = LoggerConfig()
 
@@ -561,6 +563,7 @@ class MegatronPolicyWorker:
             "moe_router_bias_update_rate"
         ]
 
+        model_cfg.moe_permute_fusion = self.cfg["megatron_cfg"]["moe_permute_fusion"]
         if "layernorm_epsilon" in self.cfg["megatron_cfg"]:
             model_cfg.layernorm_epsilon = self.cfg["megatron_cfg"]["layernorm_epsilon"]
 
@@ -607,6 +610,12 @@ class MegatronPolicyWorker:
             fully_parallel_load=True,  # Enable fully parallel load
             load_rng=False,
         )
+
+        assert "train_iters" in self.cfg["megatron_cfg"], (
+            "train_iters must be set in megatron_cfg. For an example, see "
+            "https://github.com/NVIDIA-NeMo/RL/blob/bccbc377705a81a1f4b3c31ad9767bcc15f735a8/nemo_rl/algorithms/sft.py#L175-L179."
+        )
+
         self.megatron_cfg = ConfigContainer(
             model=model_cfg,
             checkpoint=checkpoint_config,
@@ -614,7 +623,9 @@ class MegatronPolicyWorker:
             train=TrainingConfig(
                 micro_batch_size=1,  # ignored
                 global_batch_size=self.cfg["train_global_batch_size"],  # ignored
-                train_iters=1000,  # Default value for inference
+                train_iters=self.cfg["megatron_cfg"][
+                    "train_iters"
+                ],  # Set by algorithm setup
             ),
             optimizer=OptimizerConfig(
                 **self.cfg["megatron_cfg"]["optimizer"],
@@ -758,6 +769,7 @@ class MegatronPolicyWorker:
             tensor_model_parallel_size=self.cfg["megatron_cfg"][
                 "tensor_model_parallel_size"
             ],
+            trust_remote_code=True,
         )
         self.final_padded_vocab_size = tokenizer_config.padded_vocab_size
         self.dp_size = worker_sharding_annotations.get_axis_size("data_parallel")
@@ -1155,7 +1167,13 @@ class MegatronPolicyWorker:
                 input_ids = data_dict["input_ids"]
                 input_ids_cp_sharded = input_ids
                 attention_mask, _, position_ids = get_ltor_masks_and_position_ids(
-                    input_ids, 0, False, False, False
+                    data=input_ids,
+                    eod_token=0,  # used for loss_mask, which we don't use
+                    pad_token=0,  # used for loss_mask, which we don't use
+                    reset_position_ids=False,
+                    reset_attention_mask=False,
+                    eod_mask_loss=False,
+                    pad_mask_loss=False,
                 )
                 packed_seq_params = None
                 unpacked_input_ids = input_ids
@@ -1286,8 +1304,9 @@ class MegatronPolicyWorker:
                 # if isinstance(item, torch.Tensor):
                 # self.model.state_dict()[name] = item.detach().to(device="cuda", non_blocking=True, copy=True)
 
-                gc.collect()
-                torch.cuda.empty_cache()
+                if self.cfg["megatron_cfg"]["empty_unused_memory_level"] >= 1:
+                    gc.collect()
+                    torch.cuda.empty_cache()
 
                 # - self.model is the original reference_model, now on CUDA
                 # - self.reference_model is the original model, now on CPU
@@ -1301,8 +1320,9 @@ class MegatronPolicyWorker:
                 # item = item.detach().to(device="cuda", non_blocking=True, copy=True)
                 # self.model.state_dict()[name] = item
 
-                gc.collect()
-                torch.cuda.empty_cache()
+                if self.cfg["megatron_cfg"]["empty_unused_memory_level"] >= 1:
+                    gc.collect()
+                    torch.cuda.empty_cache()
 
                 ## re-enable overlap param gather after weight swap
                 if self.should_disable_forward_pre_hook:
@@ -1696,7 +1716,8 @@ class MegatronPolicyWorker:
                     if torch.is_tensor(v) and not v.is_cuda:
                         state[k] = v.to("cuda")
 
-        torch.cuda.empty_cache()
+        if self.cfg["megatron_cfg"]["empty_unused_memory_level"] >= 1:
+            torch.cuda.empty_cache()
 
     @wrap_with_nvtx_name("megatron_policy_worker/offload_before_refit")
     def offload_before_refit(self):
@@ -1726,8 +1747,9 @@ class MegatronPolicyWorker:
                         # Move the tensor to CPU and update the state dictionary
                         state[k] = v.to("cpu")
 
-        gc.collect()
-        torch.cuda.empty_cache()
+        if self.cfg["megatron_cfg"]["empty_unused_memory_level"] >= 1:
+            gc.collect()
+            torch.cuda.empty_cache()
 
         # Print memory stats after offloading
         allocated = torch.cuda.memory_allocated() / (1024**3)  # Convert to GB
@@ -1751,8 +1773,9 @@ class MegatronPolicyWorker:
             del self._held_gather_buffer
             self._held_gather_buffer = None
 
-        gc.collect()
-        torch.cuda.empty_cache()
+        if self.cfg["megatron_cfg"]["empty_unused_memory_level"] >= 1:
+            gc.collect()
+            torch.cuda.empty_cache()
 
         allocated = torch.cuda.memory_allocated() / (1024**3)  # Convert to GB
         reserved = torch.cuda.memory_reserved() / (1024**3)  # Convert to GB

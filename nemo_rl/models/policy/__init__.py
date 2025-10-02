@@ -27,12 +27,14 @@ class DTensorConfig(TypedDict):
     tensor_parallel_size: NotRequired[int]
     context_parallel_size: NotRequired[int]
     custom_parallel_plan: NotRequired[str]
+    clear_cache_every_n_steps: NotRequired[int]
 
 
 class SequencePackingConfig(TypedDict):
     enabled: bool
     train_mb_tokens: int
-    logprob_mb_tokens: int
+    # Not required because some algorithms like SFT don't calculate log probs
+    logprob_mb_tokens: NotRequired[int]
     algorithm: str
 
 
@@ -106,6 +108,8 @@ class MegatronConfig(TypedDict):
 class TokenizerConfig(TypedDict):
     name: str
     chat_template: NotRequired[str]
+    # Arguments to pass to tokenizer.apply_chat_template(...). This can be used to pass kwargs like enable_thinking=true
+    chat_template_kwargs: NotRequired[dict[str, Any]]
 
 
 class PytorchOptimizerConfig(TypedDict):
