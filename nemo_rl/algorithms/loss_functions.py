@@ -222,7 +222,7 @@ class ClippedPGLossFn(LossFunction):
                 * calculate_kl_penalty_joschu2020(
                     logprobs_policy=curr_logprobs,
                     logprobs_reference=reference_policy_logprobs,
-                    kl_clip=self.kl_clip,
+                    clamp_value=self.kl_clip,
                 )
             )
             if self.loss_type == LossType.TOKEN_LEVEL:
