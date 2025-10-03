@@ -11,9 +11,11 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+import math
 import random
 import warnings
-from functools import wraps
+from functools import partial, wraps
 from typing import Optional
 
 import numpy as np
@@ -24,12 +26,14 @@ from transformers import (
     PreTrainedTokenizerBase,
 )
 
-from nemo_rl.data import hf_datasets
+from nemo_rl.data.chat_templates import COMMON_CHAT_TEMPLATES
 from nemo_rl.models.policy import TokenizerConfig
 
 
 def calculate_kl_penalty_joschu2020(
-    logprobs_policy: torch.Tensor, logprobs_reference: torch.Tensor, kl_clip: float = 1000.0
+    logprobs_policy: torch.Tensor,
+    logprobs_reference: torch.Tensor,
+    clamp_value: Optional[float] = 20.0,
 ) -> torch.Tensor:
     """Calculates a per-token estimate of the KL Divergence between two log_probs.
 
@@ -39,7 +43,8 @@ def calculate_kl_penalty_joschu2020(
     logprobs_reference: torch.Tensor (b, s)
     """
     r = logprobs_reference - logprobs_policy
-    r = r.clip(min=-kl_clip, max=kl_clip)
+    if clamp_value is not None:
+        r = r.clamp(min=-clamp_value, max=clamp_value)
     return torch.exp(r) - r - 1
 
 
@@ -241,16 +246,31 @@ def get_tokenizer(
     if "chat_template" in tokenizer_config:
         if tokenizer_config["chat_template"] is None:
             print("Using passthrough chat template")
-            tokenizer.chat_template = (
-                hf_datasets.COMMON_CHAT_TEMPLATES.passthrough_prompt_response
-            )
+            tokenizer.chat_template = COMMON_CHAT_TEMPLATES.passthrough_prompt_response
         elif tokenizer_config["chat_template"].lower() == "default":
             print("Using tokenizer's default chat template")
+        elif tokenizer_config["chat_template"].endswith(".jinja"):
+            # Load template from file
+            template_path = tokenizer_config["chat_template"]
+            print(f"Loading chat template from file: {template_path}")
+            with open(template_path, "r") as f:
+                tokenizer.chat_template = f.read()
         else:
             print("Using custom chat template")
             tokenizer.chat_template = tokenizer_config["chat_template"]
     else:
         print("No chat template provided, using tokenizer's default")
+
+    if (
+        "chat_template_kwargs" in tokenizer_config
+        and tokenizer_config["chat_template_kwargs"] is not None
+    ):
+        assert isinstance(tokenizer_config["chat_template_kwargs"], dict), (
+            "chat_template_kwargs should be a dictionary"
+        )
+        tokenizer.apply_chat_template = partial(
+            tokenizer.apply_chat_template, **tokenizer_config["chat_template_kwargs"]
+        )
 
     # The "tokenizer" is passed to the policy workers only to use the pad/eos/bos tokens for extra padding and processing of the tokenized messages. That is the only reason it is needed.
     # However, the dataloader needs the processor for multimodal data preprocessing, so the processor is needed for the dataloader (only tokenizer is NOT enough).
@@ -266,3 +286,62 @@ def get_tokenizer(
         processor.name_or_path = tokenizer.name_or_path
 
     return tokenizer if processor is None else processor
+
+
+def maybe_pad_last_batch(batch: dict, dp_size: int, mbs: int) -> dict:
+    """Pads the given batch so that its size is divisible by (mbs * dp_size).
+
+    Args:
+        batch (dict): The batch to pad.
+        dp_size (int): Data parallel size.
+        mbs (int): Micro batch size.
+
+    Returns:
+        dict: The padded batch.
+    """
+    min_padding = (math.ceil(batch.size / (mbs * dp_size)) * mbs * dp_size) - batch.size
+    if min_padding > 0:
+        print(f"Padding last validation batch with {min_padding} padding samples")
+        # Pad input_ids
+        batch["input_ids"] = torch.cat(
+            [
+                batch["input_ids"],
+                batch["input_ids"][-1].unsqueeze(0).repeat(min_padding, 1),
+            ]
+        )
+        # Pad input_lengths
+        batch["input_lengths"] = torch.cat(
+            [
+                batch["input_lengths"],
+                batch["input_lengths"][-1].unsqueeze(0).repeat(min_padding),
+            ]
+        )
+        if "token_mask" in batch:
+            # Pad token_mask
+            batch["token_mask"] = torch.cat(
+                [
+                    batch["token_mask"],
+                    batch["token_mask"][-1].unsqueeze(0).repeat(min_padding, 1),
+                ]
+            )
+        # Pad sample_mask
+        batch["sample_mask"] = torch.cat(
+            [
+                batch["sample_mask"],
+                torch.zeros_like(batch["sample_mask"][-1])
+                .unsqueeze(0)
+                .repeat(min_padding),
+            ]
+        )
+
+        if "reference_policy_logprobs" in batch:
+            # Pad reference_policy_logprobs
+            batch["reference_policy_logprobs"] = torch.cat(
+                [
+                    batch["reference_policy_logprobs"],
+                    batch["reference_policy_logprobs"][-1]
+                    .unsqueeze(0)
+                    .repeat(min_padding, 1),
+                ]
+            )
+    return batch

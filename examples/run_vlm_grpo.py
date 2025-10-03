@@ -28,26 +28,17 @@ from transformers import AutoProcessor
 from nemo_rl.algorithms.grpo import MasterConfig, grpo_train, setup
 from nemo_rl.algorithms.utils import get_tokenizer
 from nemo_rl.data import DataConfig
-from nemo_rl.data.datasets import AllTaskProcessedDataset
-from nemo_rl.data.hf_datasets.clevr import (
-    CLEVRCoGenTDataset,
-    format_clevr_cogent_dataset,
-)
-from nemo_rl.data.hf_datasets.geometry3k import (
-    Geometry3KDataset,
-    format_geometry3k_dataset,
-)
-from nemo_rl.data.hf_datasets.refcoco import RefCOCODataset, format_refcoco_dataset
+from nemo_rl.data.datasets import AllTaskProcessedDataset, load_response_dataset
+from nemo_rl.data.datasets.response_datasets.clevr import format_clevr_cogent_dataset
+from nemo_rl.data.datasets.response_datasets.geometry3k import format_geometry3k_dataset
+from nemo_rl.data.datasets.response_datasets.refcoco import format_refcoco_dataset
 from nemo_rl.data.interfaces import (
     DatumSpec,
     LLMMessageLogType,
     TaskDataProcessFnCallable,
     TaskDataSpec,
 )
-from nemo_rl.data.hf_datasets.vision_r1 import (
-    VisionR1Dataset,
-    format_vision_r1_dataset,
-)
+from nemo_rl.data.datasets.response_datasets.vision_r1 import format_vision_r1_dataset
 from nemo_rl.data.multimodal_utils import (
     PackedTensor,
     get_dim_to_pack_along,
@@ -118,7 +109,7 @@ def hf_data_processor(
     max_seq_length: int,
     idx: int,
 ) -> DatumSpec:
-    """Process a datum dictionary (directly loaded from data/hf_datasets/<dataset_name>.py) into a DatumSpec for the VLM Environment."""
+    """Process a datum dictionary (directly loaded from response_datasets/<dataset_name>.py) into a DatumSpec for the VLM Environment."""
     # depending on the task, format the data differently
     if task_data_spec.task_name == "clevr-cogent":
         datum_dict = format_clevr_cogent_dataset(datum_dict)
@@ -137,7 +128,6 @@ def hf_data_processor(
 
     message_log: LLMMessageLogType = []
     ### only one round of interaction is assumed, this can easily be extended to a conversational setting
-    system_message = {"role": "system", "content": [{"type": "text", "text": task_data_spec.system_prompt}]}
     user_message = {"role": "user", "content": []}
     #
     images = []
@@ -166,61 +156,45 @@ def hf_data_processor(
 
     images = [resolve_to_image(image) for image in images]
 
-    # get formatted conversation messages
+    # get formatted user message
     if hasattr(processor, "conversation_preprocessor"):
-        system_message_for_chat_template = processor.conversation_preprocessor(
-            system_message
-        )
         user_message_for_chat_template = processor.conversation_preprocessor(
             user_message
         )
     else:
-        system_message_for_chat_template = system_message
         user_message_for_chat_template = user_message
 
     # this is the string-tokenized conversation template for the generation policy (for vllm)
     string_formatted_dialog = processor.apply_chat_template(
-        [system_message_for_chat_template, user_message_for_chat_template],
+        [user_message_for_chat_template],
         tokenize=False,
         add_generation_prompt=True,
     )
 
     # this is the id-tokenized and image processed conversation template for the policy
-    message_sys: dict = processor.apply_chat_template(
-        [system_message],
-        tokenize=True,
-        add_generation_prompt=False,
-        return_tensors="pt",
-        return_dict=True,
-    )
-    message_both: dict = processor.apply_chat_template(
-        [system_message, user_message],
+    message: dict = processor.apply_chat_template(
+        [user_message],
         tokenize=True,
         add_generation_prompt=True,
         return_tensors="pt",
         return_dict=True,
     )
 
-    system_message["token_ids"] = message_sys["input_ids"][0]
-    sys_len = message_sys["input_ids"].shape[1]
-    user_message["token_ids"] = message_both["input_ids"][0][sys_len:]
+    # add this for backward compatibility
+    user_message["token_ids"] = message["input_ids"][0]
     # add all keys and values to the user message, and the list of keys
     multimodal_keys = get_multimodal_keys_from_processor(processor)
     for key in multimodal_keys:
-        if key in message_both:
+        if key in message:
             user_message[key] = PackedTensor(
-                message_both[key], dim_to_pack=get_dim_to_pack_along(processor, key)
+                message[key], dim_to_pack=get_dim_to_pack_along(processor, key)
             )
 
     # specifically for gemma, we need to add token_type_ids to the user message as a sequence-type value
-    if "token_type_ids" in message_both:
-        system_message["token_type_ids"] = message_sys["token_type_ids"][0]
-        user_message["token_type_ids"] = message_both["token_type_ids"][0][
-            sys_len:
-        ]
+    if "token_type_ids" in message:
+        user_message["token_type_ids"] = message["token_type_ids"][0]
 
     ### append to user message
-    message_log.append(system_message)
     message_log.append(user_message)
 
     length = sum(len(m["token_ids"]) for m in message_log)
@@ -266,6 +240,7 @@ def setup_data(
     processor: AutoProcessor,
     data_config: DataConfig,
     env_configs: dict[str, Any],
+    seed: int,
 ) -> tuple[
     AllTaskProcessedDataset,
     Optional[AllTaskProcessedDataset],
@@ -277,27 +252,10 @@ def setup_data(
     task_spec contains the task name as well as prompt and system prompt modifiers that can be used by data processor
     """
     print("\n▶ Setting up data...")
-    # Load CLEVR-CoGenT dataset using nemo rl datasets
-    # other VLM datasets can be added here
-    if data_config["dataset_name"] == "clevr-cogent":
-        data: Any = CLEVRCoGenTDataset(
-            split=data_config["split"],
-        )
-    elif data_config["dataset_name"] == "refcoco":
-        data: Any = RefCOCODataset(
-            split=data_config["split"],
-            download_dir=data_config["download_dir"],
-        )
-    elif data_config["dataset_name"] == "geometry3k":
-        data: Any = Geometry3KDataset(
-            split=data_config["split"],
-        )
-    elif data_config["dataset_name"] == "vision_r1":
-        data: Any = VisionR1Dataset(
-            split=data_config["split"],
-        )
-    else:
-        raise ValueError(f"No processor for dataset {data_config['dataset_name']}.")
+
+    # load dataset
+    # TODO @yukih: currently seed is not used for vlm datasets
+    data: Any = load_response_dataset(data_config, seed)
 
     task_name = data.task_name
     vlm_task_spec = TaskDataSpec(
@@ -400,7 +358,7 @@ def main() -> None:
         val_dataset,
         task_to_env,
         val_task_to_env,
-    ) = setup_data(processor, config["data"], config["env"])
+    ) = setup_data(processor, config["data"], config["env"], config["grpo"]["seed"])
 
     (
         policy,

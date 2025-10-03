@@ -26,12 +26,10 @@ from transformers import AutoTokenizer
 from nemo_rl.algorithms.loss_functions import (
     PreferenceLoss,
 )
-from nemo_rl.algorithms.utils import set_seed
+from nemo_rl.algorithms.utils import maybe_pad_last_batch, set_seed
 from nemo_rl.data import DataConfig
-from nemo_rl.data.datasets import (
-    AllTaskProcessedDataset,
-    preference_collate_fn,
-)
+from nemo_rl.data.collate_fn import preference_collate_fn
+from nemo_rl.data.datasets import AllTaskProcessedDataset
 from nemo_rl.data.interfaces import TaskDataSpec
 from nemo_rl.distributed.virtual_cluster import ClusterConfig, RayVirtualCluster
 from nemo_rl.models.policy import PolicyConfig
@@ -40,7 +38,7 @@ from nemo_rl.models.policy.lm_policy import Policy
 from nemo_rl.utils.checkpoint import CheckpointingConfig, CheckpointManager
 from nemo_rl.utils.logger import Logger, LoggerConfig
 from nemo_rl.utils.nsys import maybe_gpu_profile_step
-from nemo_rl.utils.timer import Timer
+from nemo_rl.utils.timer import TimeoutChecker, Timer
 
 
 class RMSaveState(TypedDict):
@@ -172,7 +170,7 @@ def setup(
                 ],
                 add_loss_mask=False,
             ),
-            drop_last=True,
+            drop_last=False,
         )
         for k, v in val_dataset.items()
     }
@@ -195,6 +193,18 @@ def setup(
     #   Training
     # ==========================
     print("\n▶ Setting up model...")
+    if policy_config.get("megatron_cfg", {}).get("enabled", False):
+        total_train_iters = min(
+            rm_config["max_num_steps"],
+            rm_config["max_num_epochs"] * len(train_dataloader),
+        )
+        ## NOTE: we double the train_iters because effective batch size is doubled
+        ## for (chosen, rejected) pairs
+        policy_config["megatron_cfg"]["train_iters"] = total_train_iters * 2
+        if "scheduler" in policy_config["megatron_cfg"]:
+            for k in policy_config["megatron_cfg"]["scheduler"]:
+                if "iters" in k:
+                    policy_config["megatron_cfg"]["scheduler"][k] *= 2
     policy = Policy(
         cluster=cluster,
         config=policy_config,
@@ -293,6 +303,9 @@ def validate_one_dataset(
 ):
     """Run validation on one validation dataset."""
     if val_dataloader is None:
+        assert val_dataloader is not None or master_config["dpo"]["val_period"] == 0, (
+            "val_dataloader is None, so dpo.val_period must be 0"
+        )
         print("  ⚠️ No validation dataloader provided, skipping validation")
         return
 
@@ -307,14 +320,20 @@ def validate_one_dataset(
         dict_val_metrics = defaultdict(list)
         num_valid_batches = 0
         for batch_idx, val_batch in enumerate(val_dataloader):
+            # When running validation with drop_last=False, we might end up with a partial batch.
+            # In this case, we pad the batch to the next multiple of micro_batch_size * dp_size.
+            if val_batch.size < val_batch_size * 2:
+                dp_size = policy.sharding_annotations.get_axis_size("data_parallel")
+                val_batch = maybe_pad_last_batch(val_batch, dp_size, val_mbs * 2)
+
             ## just run model fwd
             val_results = policy.train(
                 val_batch,
                 loss_fn,
                 eval_mode=True,
-                ## NOTE: we double the batch size here because each preference example corresponds to a pair of
-                ## examples, chosen and rejected, and the pair needs to be processed as part of the same microbatch.
-                gbs=val_batch_size * 2,
+                gbs=val_batch.size,
+                # NOTE: we double the batch size because each preference example corresponds to a pair of
+                # examples, chosen and rejected, and the pair needs to be processed as part of the same microbatch.
                 mbs=val_mbs * 2,
             )
 
@@ -408,7 +427,11 @@ def rm_train(
 ):
     # Run basic rm training
     timer = Timer()
-
+    timeout = TimeoutChecker(
+        timeout=master_config["checkpointing"]["checkpoint_must_save_by"],
+        fit_last_save_time=True,
+    )
+    timeout.start_iterations()
     if rm_save_state is None:
         rm_save_state = _default_rm_save_state()
         current_epoch = 0
@@ -494,13 +517,21 @@ def rm_train(
                     )
 
                 ## Checkpointing
+                timeout.mark_iteration()
+
                 rm_save_state["consumed_samples"] += master_config["policy"][
                     "train_global_batch_size"
                 ]
-                if master_config["checkpointing"]["enabled"] and (
+
+                should_save_by_step = (
                     is_last_step
                     or (total_steps + 1) % master_config["checkpointing"]["save_period"]
                     == 0
+                )
+                should_save_by_timeout = timeout.check_save()
+
+                if master_config["checkpointing"]["enabled"] and (
+                    should_save_by_step or should_save_by_timeout
                 ):
                     ## +1 because step is 0-indexed
                     rm_save_state["step"] = (current_step + 1) % len(train_dataloader)
@@ -550,6 +581,7 @@ def rm_train(
                             tokenizer_path=os.path.join(
                                 checkpoint_path, "policy", "tokenizer"
                             ),
+                            checkpointing_cfg=master_config["checkpointing"],
                         )
                         torch.save(
                             train_dataloader.state_dict(),
@@ -597,6 +629,8 @@ def rm_train(
             current_step += 1
             total_steps += 1
 
+            if should_save_by_timeout:
+                return
             if (
                 master_config["rm"]["max_num_steps"] != -1
                 and total_steps >= master_config["rm"]["max_num_steps"]

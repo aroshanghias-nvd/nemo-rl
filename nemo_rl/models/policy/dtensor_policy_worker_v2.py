@@ -15,6 +15,7 @@
 import gc
 import itertools
 import os
+import warnings
 from collections import defaultdict
 from contextlib import AbstractContextManager, contextmanager, nullcontext
 from typing import Any, Generator, Iterable, Optional, cast
@@ -23,10 +24,11 @@ import ray
 import torch
 from accelerate import init_empty_weights
 from nemo_automodel import (
-    NeMoAutoModelForCausalLM,
     NeMoAutoModelForSequenceClassification,
 )
-from nemo_automodel.components._transformers.utils import sliding_window_overwrite
+from nemo_automodel.components._transformers.utils import (
+    sliding_window_overwrite,
+)
 from nemo_automodel.components.distributed.cp_utils import (
     create_context_parallel_ctx,
     get_train_context,
@@ -37,7 +39,6 @@ from nemo_automodel.components.distributed.grad_utils import (
 )
 from nemo_automodel.components.distributed.parallelizer import (
     fsdp2_strategy_parallelize,
-    unshard_fsdp2_model,
 )
 from nemo_automodel.components.distributed.tensor_utils import (
     get_cpu_state_dict,
@@ -56,6 +57,7 @@ from torch.distributed.fsdp import (
 from torch.distributed.tensor import DTensor, Shard
 from transformers import (
     AutoConfig,
+    AutoProcessor,
     AutoTokenizer,
 )
 from transformers.models.gemma3.modeling_gemma3 import Gemma3ForCausalLM
@@ -72,6 +74,7 @@ from nemo_rl.models.policy import PolicyConfig
 from nemo_rl.models.policy.interfaces import (
     LogprobOutputSpec,
     ReferenceLogprobOutputSpec,
+    ScoreOutputSpec,
 )
 from nemo_rl.models.policy.utils import (
     configure_dynamo_cache,
@@ -79,11 +82,13 @@ from nemo_rl.models.policy.utils import (
     get_handle_from_tensor,
     get_runtime_env_for_policy_worker,
     import_class_from_path,
+    resolve_model_class,
 )
-from nemo_rl.utils.native_checkpoint import (
+from nemo_rl.utils.automodel_checkpoint import (
     load_checkpoint,
     save_checkpoint,
 )
+from nemo_rl.utils.checkpoint import CheckpointingConfig
 from nemo_rl.utils.nsys import wrap_with_nvtx_name
 
 
@@ -105,12 +110,19 @@ class DTensorPolicyWorkerV2:
         self,
         config: PolicyConfig,
         tokenizer: AutoTokenizer,
+        processor: Optional[AutoProcessor] = None,
         weights_path: Optional[str] = None,
         optimizer_path: Optional[str] = None,
         init_optimizer: bool = True,
         init_reference_model: bool = True,
         **kwargs: Any,
     ):
+        self.tokenizer = tokenizer
+        self.processor = processor
+        self.is_vlm = processor is not None
+
+        print(f"Initializing DTensorPolicyWorkerV2 with is_vlm={self.is_vlm}")
+
         self.is_generation_colocated = None
         if "generation" in config and config["generation"] is not None:
             self.is_generation_colocated = config["generation"]["colocated"]["enabled"]
@@ -146,6 +158,9 @@ class DTensorPolicyWorkerV2:
         print(f"[Rank {self.rank}] Loading model {model_name} on CPU...")
         self.enable_seq_packing = self.cfg["sequence_packing"]["enabled"]
         if self.enable_seq_packing:
+            assert not self.is_vlm, (
+                "Sequence packing is not supported for VLM models. Please set policy.sequence_packing.enabled = False to train VLM models."
+            )
             print(
                 f"[Rank {self.rank}] Sequence packing is enabled for model {model_name}"
             )
@@ -163,6 +178,10 @@ class DTensorPolicyWorkerV2:
             attn_implementation="flash_attention_2"
             if self.enable_seq_packing
             else None,
+        )
+
+        self.allow_flash_attn_args = self.check_model_allow_flash_attn_args(
+            model_config
         )
 
         self._is_reward_model = (
@@ -195,9 +214,11 @@ class DTensorPolicyWorkerV2:
             else:
                 raise ValueError(f"Unknown reward model type: {rm_type}")
         else:
-            model_class = NeMoAutoModelForCausalLM
+            # DO NOT assume AutoModelForCausalLM, multimodal models can inherit from AutoModelForImageTextToText, AutoModelForTextToWaveform, etc.
+            model_class = resolve_model_class(model_config.model_type)
 
         full_state_dict = None
+        model_state_dict_keys = None
         if self.rank == 0:
             print(f"[Rank {self.rank}] Loading model {model_name} on CPU...")
             model = model_class.from_pretrained(
@@ -205,9 +226,13 @@ class DTensorPolicyWorkerV2:
                 device_map="cpu",  # load weights onto CPU initially
                 trust_remote_code=True,
                 config=model_config,
+                use_liger_kernel=False,
+                torch_dtype=str(model_config.torch_dtype),
             )
 
             full_state_dict = model.state_dict()
+            # Store the original model state dict keys before any parallelization
+            model_state_dict_keys = list(full_state_dict.keys())
             del model
 
         print(f"[Rank {self.rank}] Initializing empty model for FSDP...")
@@ -223,19 +248,13 @@ class DTensorPolicyWorkerV2:
                 attn_implementation="flash_attention_2"
                 if self.enable_seq_packing
                 else None,
+                use_liger_kernel=False,
                 trust_remote_code=True,
+                torch_dtype=str(model_config.torch_dtype),
             )
 
         if self.model.config.pad_token_id is None:
             self.model.config.pad_token_id = tokenizer.pad_token_id
-
-        # caching since this property is not always preserved after FSDP
-        self.tokenizer = tokenizer
-
-        # ------------------------------------------------
-        # 3) Move to GPU + Composable FSDP
-        #    (Initialize device mesh, shard submodules, then shard entire model)
-        # ------------------------------------------------
 
         tp_size = self.cfg["dtensor_cfg"]["tensor_parallel_size"]
         cp_size = self.cfg["dtensor_cfg"]["context_parallel_size"]
@@ -264,6 +283,10 @@ class DTensorPolicyWorkerV2:
                 "It's a known issue that context parallel can't be used together with sequence parallel in DTensor worker. "
                 "Please either set cp_size = 1 or disable sequence parallel. "
                 "See https://github.com/NVIDIA-NeMo/RL/issues/659 for more details."
+            )
+
+            assert not self.is_vlm, (
+                "Context parallel is yet not supported for VLM models. Please set cp_size = 1 to train VLM models."
             )
 
         # For FSDP2 compatibility, we need to support HSDP structure
@@ -299,6 +322,10 @@ class DTensorPolicyWorkerV2:
         self.cp_size = cp_size
         self.device_mesh = device_mesh
 
+        # ------------------------------------------------
+        # 3) Move to GPU + Composable FSDP
+        #    (Initialize device mesh, shard submodules, then shard entire model)
+        # ------------------------------------------------
         self.model = fsdp2_strategy_parallelize(
             self.model,
             device_mesh=self.device_mesh,
@@ -331,6 +358,11 @@ class DTensorPolicyWorkerV2:
                 broadcast_from_rank0=True,
             ),
         )
+
+        # Broadcast model state dict keys to all ranks and store as instance variable
+        keys_to_broadcast = [model_state_dict_keys]
+        torch.distributed.broadcast_object_list(keys_to_broadcast, src=0)
+        self.model_state_dict_keys = keys_to_broadcast[0]
 
         # Handle tied word embeddings after loading the state dict
         # We need to actually tie the parameters at the model level
@@ -436,6 +468,17 @@ class DTensorPolicyWorkerV2:
             self.model_update_group = PyNcclCommunicator(pg, device=device)
 
     def is_alive(self) -> bool:
+        return True
+
+    def check_model_allow_flash_attn_args(self, model_config) -> bool:
+        # Some models doesn't support flash_attn_kwargs
+        # Check nemotron nas.
+        if (
+            model_config.architectures[0] == "DeciLMForCausalLM"
+            and model_config.model_type == "nemotron-nas"
+        ):
+            return False
+
         return True
 
     def reset_peak_memory_stats(self) -> None:
@@ -557,10 +600,20 @@ class DTensorPolicyWorkerV2:
                     mb_iterator = batch.make_microbatch_iterator(mbs)
                     iterator_len = batch.size // mbs
 
+                empty_cache_steps = self.cfg.get("dtensor_cfg", {}).get(
+                    "clear_cache_every_n_steps"
+                )
+                if empty_cache_steps:
+                    warnings.warn(
+                        f"Emptying cache every {empty_cache_steps} microbatches, doing so unnnecessarily would incur a large performance overhead."
+                    )
+
                 for mb_idx, mb in enumerate(
                     itertools.chain(mb_iterator, dummy_iterator)
                 ):
-                    torch.cuda.empty_cache()
+                    # Conditioanlly empty cache when sensitive to fragmentation
+                    if empty_cache_steps and mb_idx % empty_cache_steps == 0:
+                        torch.cuda.empty_cache()
 
                     with torch.autocast(device_type="cuda", dtype=self.dtype):
                         if self.enable_seq_packing:
@@ -589,7 +642,7 @@ class DTensorPolicyWorkerV2:
 
                             attention_mask = torch.ones(
                                 (batch_size, seq_len),
-                                dtype=torch.long,
+                                dtype=torch.bool,
                                 device=input_ids.device,
                             )
                             position_ids = torch.arange(
@@ -597,8 +650,18 @@ class DTensorPolicyWorkerV2:
                             ).repeat(batch_size, 1)
                             flash_attn_kwargs = {}
 
+                        # add vlm kwargs to model call
+                        vlm_kwargs = mb.get_multimodal_dict(
+                            as_tensors=True, device=input_ids.device
+                        )
+                        if len(vlm_kwargs) > 0:
+                            position_ids = None
+
                     context_parallel_ctx = None
                     if self.cp_size > 1:
+                        assert len(vlm_kwargs) == 0, (
+                            f"multimodal kwargs={vlm_kwargs} are not supported for context parallel"
+                        )
                         seq_index = torch.arange(
                             seq_len, device=input_ids.device
                         ).repeat(1, 1)
@@ -624,6 +687,7 @@ class DTensorPolicyWorkerV2:
                                 position_ids=position_ids,
                                 use_cache=False,
                                 flash_attn_kwargs=flash_attn_kwargs,
+                                **vlm_kwargs,
                             )
 
                             if self._is_reward_model:
@@ -631,6 +695,15 @@ class DTensorPolicyWorkerV2:
                                 # Note that it should be empty anyway since sequence packing
                                 # is not supported for reward models.
                                 assert not flash_attn_kwargs
+                                del model_args["flash_attn_kwargs"]
+                            # remove flash_attn_kwargs if there are multimodal kwargs
+                            if len(vlm_kwargs) > 0:
+                                del model_args["flash_attn_kwargs"]
+
+                            if (
+                                not self.allow_flash_attn_args
+                                and "flash_attn_kwargs" in model_args
+                            ):
                                 del model_args["flash_attn_kwargs"]
 
                             outputs = self.model(**model_args)
@@ -791,6 +864,7 @@ class DTensorPolicyWorkerV2:
 
             return metrics
 
+    # TODO @Rayen Tian: Related Issue: Refactor shared logic between score() and get_logprobs() (https://github.com/NVIDIA-NeMo/RL/issues/1094)
     @wrap_with_nvtx_name("dtensor_policy_worker_v2/get_logprobs")
     def get_logprobs(
         self, data: BatchedDataDict[Any], micro_batch_size: Optional[int] = None
@@ -826,7 +900,7 @@ class DTensorPolicyWorkerV2:
         all_log_probs = []
         self.model.eval()
 
-        with unshard_fsdp2_model(self.model), torch.no_grad():
+        with torch.no_grad():
             data.to("cuda")
             dummy_iterator = iter([])
             if self.cfg["dynamic_batching"]["enabled"]:
@@ -860,9 +934,15 @@ class DTensorPolicyWorkerV2:
                 step += 1
                 input_ids = lp_batch.get("input_ids").cuda()
                 input_lengths = lp_batch.get("input_lengths")
+                vlm_kwargs = lp_batch.get_multimodal_dict(
+                    as_tensors=True, device=input_ids.device
+                )
 
                 batch_size, seq_len = input_ids.shape
                 if self.enable_seq_packing:
+                    assert len(vlm_kwargs) == 0, (
+                        "multimodal kwargs are not supported for sequence packing"
+                    )
                     input_ids, position_ids, _ = pack_sequences(
                         input_ids=input_ids,
                         input_lengths=input_lengths,
@@ -878,13 +958,13 @@ class DTensorPolicyWorkerV2:
                         input_lengths=input_lengths,
                     )
                 else:
-                    # Create attention mask for right-padded data
-                    attention_mask = torch.zeros(
-                        (batch_size, seq_len), dtype=torch.long, device=input_ids.device
+                    # Create post_attention_mask for right-padded data for masking token after forwarding.
+                    post_attention_mask = torch.zeros(
+                        (batch_size, seq_len), dtype=torch.bool, device=input_ids.device
                     )
                     for i, length in enumerate(input_lengths):
                         # For right-padded sequence, set 1s at the beginning of the sequence
-                        attention_mask[i, :length] = 1
+                        post_attention_mask[i, :length] = 1
 
                     # explicitly create position ids for the input, otherwise the sharding
                     # for DTensor will be incorrect
@@ -893,17 +973,25 @@ class DTensorPolicyWorkerV2:
                     ).repeat(batch_size, 1)
                     flash_attn_kwargs = {}
 
-                with torch.autocast(device_type="cuda", dtype=self.dtype):
                     # DTensor requires the casual attention kernel to hit,
                     # yet our attention mask above is not always all 1s
                     # this is fine because we mask with the actual attention mask
                     # later, but for input it has to be all 1s
-                    attention_mask_input_all_ones = torch.ones(
-                        (batch_size, seq_len), dtype=torch.long, device=input_ids.device
+                    attention_mask = torch.ones(
+                        (batch_size, seq_len),
+                        dtype=torch.bool,
+                        device=input_ids.device,
                     )
+
+                # if there are multimodal kwargs, we don't need to add position_ids (computed internally)
+                if len(vlm_kwargs) > 0:
+                    position_ids = None
 
                 context_parallel_ctx = None
                 if self.cp_size > 1:
+                    assert len(vlm_kwargs) == 0, (
+                        "multimodal kwargs are not supported for context parallel"
+                    )
                     seq_index = torch.arange(seq_len, device=input_ids.device).repeat(
                         1, 1
                     )
@@ -919,13 +1007,24 @@ class DTensorPolicyWorkerV2:
 
                 with get_train_context(False, False, context_parallel_ctx)():
                     with torch.autocast(device_type="cuda", dtype=self.dtype):
-                        outputs = self.model(
+                        model_args = dict(
                             input_ids=input_ids,
-                            attention_mask=attention_mask_input_all_ones,
+                            attention_mask=attention_mask,
                             position_ids=position_ids,
                             use_cache=False,
                             flash_attn_kwargs=flash_attn_kwargs,
+                            **vlm_kwargs,
                         )
+                        if len(vlm_kwargs) > 0:
+                            del model_args["flash_attn_kwargs"]
+
+                        if (
+                            not self.allow_flash_attn_args
+                            and "flash_attn_kwargs" in model_args
+                        ):
+                            del model_args["flash_attn_kwargs"]
+
+                        outputs = self.model(**model_args)
 
                     logits = outputs.logits
 
@@ -1037,7 +1136,7 @@ class DTensorPolicyWorkerV2:
 
                 if not self.enable_seq_packing:
                     # Apply mask to zero out padding tokens logprobs
-                    token_logprobs = token_logprobs * attention_mask
+                    token_logprobs = token_logprobs * post_attention_mask
                 else:
                     # For packed sequences, unpack logprobs
                     unpacked_logprobs = torch.zeros(
@@ -1070,6 +1169,132 @@ class DTensorPolicyWorkerV2:
             all_log_probs_padded.append(lp)
         return_data["logprobs"] = torch.cat(all_log_probs_padded, dim=0).cpu()
 
+        return return_data
+
+    # TODO @Rayen Tian: Related Issue: Refactor shared logic between score() and get_logprobs() (https://github.com/NVIDIA-NeMo/RL/issues/1094)
+    @wrap_with_nvtx_name("dtensor_policy_worker_v2/score")
+    def score(self, data: BatchedDataDict) -> BatchedDataDict[ScoreOutputSpec]:
+        global_batch_size = min(self.cfg["batch_size"], data.size)
+
+        sequence_dim = 1
+        seq_dim_size = data.get("input_ids").shape[sequence_dim]
+        for k, v in data.items():
+            if torch.is_tensor(v) and len(v.shape) > 1:
+                assert v.shape[sequence_dim] == seq_dim_size, (
+                    f"Dim 1 must be the sequence dim, expected dim 1={seq_dim_size} but got shape {v.shape}"
+                )
+        self.model.eval()
+        print("Begin to batch datas")
+        with torch.no_grad():
+            data.to("cuda")
+            dummy_iterator = iter([])
+            if self.cfg["dynamic_batching"]["enabled"]:
+                mb_iterator = data.make_microbatch_iterator_with_dynamic_shapes()
+                iterator_len = data.get_microbatch_iterator_dynamic_shapes_len()
+            elif self.enable_seq_packing:
+                mb_iterator = data.make_microbatch_iterator_for_packable_sequences()
+                iterator_len, max_seqlen = (
+                    data.get_microbatch_iterator_for_packable_sequences_len()
+                )
+                max_batch_ct = torch.tensor([iterator_len], device="cuda")
+                torch.distributed.all_reduce(
+                    max_batch_ct, op=torch.distributed.ReduceOp.MAX
+                )
+                dummy_batch_ct = int(max_batch_ct.item() - iterator_len)
+                dummy_iterator = data.make_microbatch_iterator_for_packable_sequences()
+                dummy_iterator = itertools.islice(
+                    itertools.cycle(dummy_iterator), dummy_batch_ct
+                )
+            else:
+                mb_iterator = data.make_microbatch_iterator(global_batch_size)
+                iterator_len = data.size // global_batch_size
+            step = 0
+            all_rm_scores = []
+            for batch_idx, generate_batch in enumerate(
+                itertools.chain(mb_iterator, dummy_iterator)
+            ):
+                step += 1
+                input_ids = generate_batch.get("input_ids").cuda()
+                input_lengths = generate_batch.get("input_lengths")
+                batch_size, seq_len = input_ids.shape
+                if self.enable_seq_packing:
+                    input_ids, position_ids, _ = pack_sequences(
+                        input_ids=input_ids,
+                        input_lengths=input_lengths,
+                        packed_sequence_size=[
+                            batch_size
+                        ],  # flash attention 2 expects flattened input
+                        padding_value=self.tokenizer.eos_token_id,
+                        return_attention_mask=False,
+                    )
+                    seq_len = input_ids.shape[1]
+                    attention_mask = None
+                    flash_attn_kwargs = get_flash_attention_kwargs(
+                        input_lengths=input_lengths,
+                    )
+                else:
+                    # Create attention mask for right-padded data
+                    post_attention_mask = torch.zeros(
+                        (batch_size, seq_len), dtype=torch.bool, device=input_ids.device
+                    )
+                    for i, length in enumerate(input_lengths):
+                        # For right-padded sequence, set 1s at the beginning of the sequence
+                        post_attention_mask[i, :length] = 1
+                    position_ids = torch.arange(
+                        seq_len, device=input_ids.device
+                    ).repeat(batch_size, 1)
+
+                    attention_mask = torch.ones(
+                        (batch_size, seq_len),
+                        dtype=torch.bool,
+                        device=input_ids.device,
+                    )
+                context_parallel_ctx = None
+                if self.cp_size > 1:
+                    seq_index = torch.arange(seq_len, device=input_ids.device).repeat(
+                        1, 1
+                    )
+                    cp_buffers = [input_ids, position_ids, seq_index]
+
+                    # Create context parallel context
+                    context_parallel_ctx = create_context_parallel_ctx(
+                        cp_mesh=self.cp_mesh,
+                        cp_buffers=cp_buffers,
+                        cp_seq_dims=[sequence_dim] * len(cp_buffers),
+                        cp_no_restore_buffers=set(cp_buffers),
+                    )
+                with get_train_context(False, False, context_parallel_ctx)():
+                    with torch.autocast(device_type="cuda", dtype=self.dtype):
+                        model_args = dict(
+                            input_ids=input_ids,
+                            attention_mask=attention_mask,
+                            position_ids=position_ids,
+                            use_cache=False,
+                        )
+                        outputs = self.model(**model_args)
+
+                    if not hasattr(outputs, "logits"):
+                        logits = self.model.lm_head(outputs.last_hidden_state)
+                    else:
+                        logits = outputs.logits
+                    # Apply temperature scaling
+                    logits = self._apply_temperature_scaling(logits)
+                if isinstance(logits, DTensor):
+                    logits = logits.to(torch.float32)
+                else:
+                    logits = outputs.logits.to(torch.float32)
+
+                rm_scores = to_local_if_dtensor(logits)
+                rm_scores = rm_scores.squeeze(-1)
+                all_rm_scores.append(rm_scores)
+
+        all_rm_scores = torch.cat(all_rm_scores, dim=0)
+        all_rm_scores = all_rm_scores.squeeze(-1).cpu()
+        return_data = BatchedDataDict[ScoreOutputSpec](
+            {
+                "scores": all_rm_scores,
+            }
+        )
         return return_data
 
     @contextmanager
@@ -1375,11 +1600,30 @@ class DTensorPolicyWorkerV2:
         weights_path: str,
         optimizer_path: Optional[str] = None,
         tokenizer_path: Optional[str] = None,
+        checkpointing_cfg: Optional[CheckpointingConfig] = None,
     ) -> None:
         """Save a checkpoint of the model.
 
         the optimizer states are saved only if `optimizer` and `optimizer_path` are provided.
         """
+        if checkpointing_cfg is None:
+            raise ValueError(
+                "checkpointing_cfg must be provided when saving checkpoint"
+            )
+
+        # Extract only the checkpointing configuration keys that exist
+        checkpoint_kwargs = {
+            key: value
+            for key, value in checkpointing_cfg.items()
+            if key
+            in {
+                "model_save_format",
+                "save_consolidated",
+                "is_peft",
+                "peft_config",
+            }
+        }
+
         save_checkpoint(
             model=self.model,
             weights_path=weights_path,
@@ -1388,10 +1632,14 @@ class DTensorPolicyWorkerV2:
             optimizer_path=optimizer_path,
             tokenizer=self.tokenizer if tokenizer_path else None,
             tokenizer_path=tokenizer_path,
+            model_state_dict_keys=self.model_state_dict_keys,
+            **checkpoint_kwargs,
         )
 
     def load_checkpoint(
-        self, weights_path: str, optimizer_path: Optional[str] = None
+        self,
+        weights_path: str,
+        optimizer_path: Optional[str] = None,
     ) -> None:
         """Load a checkpoint into the model."""
         load_checkpoint(
