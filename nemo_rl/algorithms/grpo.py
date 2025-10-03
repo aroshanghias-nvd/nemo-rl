@@ -32,7 +32,11 @@ from nemo_rl.algorithms.loss_functions import (
     ClippedPGLossDataDict,
     ClippedPGLossFn,
 )
-from nemo_rl.algorithms.utils import calculate_baseline_and_std_per_prompt, set_seed
+from nemo_rl.algorithms.utils import (
+    calculate_baseline_and_std_per_prompt,
+    print_performance_metrics,
+    set_seed,
+)
 from nemo_rl.data import DataConfig
 from nemo_rl.data.collate_fn import rl_collate_fn
 from nemo_rl.data.datasets import AllTaskProcessedDataset
@@ -878,9 +882,8 @@ def grpo_train(
                         ):
                             warnings.warn(
                                 f"You asked to save checkpoints based on {master_config['checkpointing']['metric_name']} but the metric is not found in the save state. "
-                                "Saving most recent k checkpoints instead."
+                                "This checkpoint will not be saved as top-k."
                             )
-                            master_config["checkpointing"]["metric_name"] = None
 
                     with timer.time("checkpointing"):
                         print(
@@ -958,7 +961,6 @@ def grpo_train(
                     total_steps + 1,
                     name="train/token_mult_prob_error_plot_sample",
                 )
-
             print("\n📊 Training Results:")
 
             print(f"  • Loss: {metrics['loss']:.4f}")
@@ -967,39 +969,18 @@ def grpo_train(
                 f"  • Mean Generation Length: {rollout_metrics['mean_gen_tokens_per_sample']:.4f}",
                 flush=True,
             )
-            if "total_flops" in train_results:
-                total_tflops = (
-                    train_results["total_flops"]
-                    / timing_metrics["policy_training"]
-                    / 1e12
-                )
-                num_ranks = train_results["num_ranks"]
-                print(
-                    f"  • Training FLOPS: {total_tflops:.2f} TFLOPS ({total_tflops / num_ranks:.2f} TFLOPS per rank)",
-                    flush=True,
-                )
-                if "theoretical_tflops" in train_results:
-                    theoretical_tflops = train_results["theoretical_tflops"]
-                    print(
-                        f"  • Training Model Floating Point Utilization: {100 * total_tflops / theoretical_tflops:.2f}%",
-                        flush=True,
-                    )
-                    metrics["train_fp_utilization"] = total_tflops / theoretical_tflops
 
             print("\n⏱️  Timing:", flush=True)
             # Display total time first, separately
             total_time = timing_metrics.get("total_step_time", 0)
 
+            number_of_samples_per_step = (
+                master_config["grpo"]["num_prompts_per_step"]
+                * master_config["grpo"]["num_generations_per_prompt"]
+            )
             total_num_gpus = (
                 master_config["cluster"]["num_nodes"]
                 * master_config["cluster"]["gpus_per_node"]
-            )
-            metrics.update(
-                {
-                    "tokens_per_sec_per_gpu": metrics["total_num_tokens"]
-                    / total_time
-                    / total_num_gpus
-                }
             )
 
             print(f"  • Total step time: {total_time:.2f}s", flush=True)
@@ -1012,7 +993,14 @@ def grpo_train(
                     percent = (v / total_time * 100) if total_time > 0 else 0
                     print(f"  • {k}: {v:.2f}s ({percent:.1f}%)", flush=True)
 
+            performance_metrics = print_performance_metrics(
+                train_results, metrics, timing_metrics, master_config
+            )
+
             logger.log_metrics(metrics, total_steps + 1, prefix="train")
+            logger.log_metrics(
+                performance_metrics, total_steps + 1, prefix="performance"
+            )
             logger.log_metrics(timing_metrics, total_steps + 1, prefix="timing/train")
 
             timer.reset()
@@ -1450,6 +1438,7 @@ def async_grpo_train(
                     for t in trajectories:
                         for k, v in t["rollout_metrics"].items():
                             rollout_metrics.setdefault(k, []).append(v)
+                    # TODO: this simple averaging might cause misleading information for such data as max_gen_tokens, etc.
                     rollout_metrics = {
                         k: (sum(v) / len(v) if isinstance(v[0], (int, float)) else v)
                         for k, v in rollout_metrics.items()
@@ -1715,6 +1704,8 @@ def async_grpo_train(
                 "loss": train_results["loss"].numpy(),
                 "reward": rewards.numpy(),
                 "grad_norm": train_results["grad_norm"].numpy(),
+                "mean_prompt_length": repeated_batch["length"].numpy(),
+                "total_num_tokens": input_lengths.numpy(),
             }
             metrics.update(train_results["all_mb_metrics"])
             for k, v in metrics.items():
@@ -1755,6 +1746,14 @@ def async_grpo_train(
                     percent = (v / total_time * 100) if total_time > 0 else 0
                     print(f"  • {k}: {v:.2f}s ({percent:.1f}%)")
 
+            performance_metrics = print_performance_metrics(
+                train_results, metrics, timing_metrics, master_config
+            )
+
+            if "per_worker_token_counts" in metrics:
+                del metrics["per_worker_token_counts"]
+
+            logger.log_metrics(performance_metrics, step + 1, prefix="performance")
             logger.log_metrics(metrics, step + 1, prefix="train")
             logger.log_metrics(timing_metrics, step + 1, prefix="timing/train")
 
