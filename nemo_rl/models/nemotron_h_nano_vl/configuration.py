@@ -60,5 +60,5 @@ class NemotronH_Nano_VL_V2_Config(PretrainedConfig):
         # self.hidden_size = getattr(self.text_config, "hidden_size", 0)
 
         self._attn_implementation = attn_implementation
-        self.vision_config.use_flash_attn = "flash_attention" in self._attn_implementation
+        self.vision_config.use_flash_attn = self._attn_implementation is not None and "flash_attention" in self._attn_implementation
         self.text_config._attn_implementation = self._attn_implementation
