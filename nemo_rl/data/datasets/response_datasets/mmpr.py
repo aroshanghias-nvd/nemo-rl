@@ -66,7 +66,7 @@ def format_mmpr_dataset(
     user_content = [
         {
             "type": "text",
-            "text": str(example["question"]),
+            "text": str(example["question"]).replace("<image>", ""),
         },
     ]
 
@@ -104,6 +104,32 @@ def format_mmpr_dataset(
         ],
     }
 
+def process_mmpr_example(example: dict[str, Any]) -> dict[str, Any]:
+    """Process an MMPR example."""
+    thinking_mode = False
+    if "final answer:" in example["chosen"].lower():
+        index_chosen = example["chosen"].lower().find("final answer:")
+        example["chosen"] = "<think>" + example["chosen"][:index_chosen] + "</think>" + example["chosen"][index_chosen:]
+        index_rejected = example["rejected"].lower().find("final answer:")
+        example["rejected"] = "<think>" + example["rejected"][:index_rejected] + "</think>" + example["rejected"][index_rejected:]
+        thinking_mode = True
+    elif "\\boxed" in example["chosen"]:
+        index_chosen = example["chosen"].find("\\boxed")
+        example["chosen"] = "<think>" + example["chosen"][:index_chosen] + "</think>" + example["chosen"][index_chosen:]
+        index_rejected = example["rejected"].find("\\boxed")
+        example["rejected"] = "<think>" + example["rejected"][:index_rejected] + "</think>" + example["rejected"][index_rejected:]
+        thinking_mode = True
+    else:
+        example["chosen"] = "<think></think>" + example["chosen"] 
+        example["rejected"] = "<think></think>" + example["rejected"] 
+        thinking_mode = False
+
+    if thinking_mode:
+        example["system"] = "/think"
+    else:
+        example["system"] = "/no_think"
+    return example
+
 def prepare_mmpr_dataset(
     split: str = "train", task_name: Optional[str] = None
 ):
@@ -113,34 +139,46 @@ def prepare_mmpr_dataset(
 
     try:
         # Load the MMPR dataset from HuggingFace
-        print("Downloading MMPR dataset from HuggingFace...")
+        print("Loading MMPR dataset from HuggingFace...")
 
         # Try multiple loading strategies due to dataset structure complexity
         full_dataset = None
+        import json
+        import os
+        from datasets import Dataset
         with open(f"./MMPR-v1.2/meta.json", "r") as f:
             meta_data = json.load(f)
+
         dataset = []
         for dataset_name, dataset_info in meta_data.items():
+                # if "_".join(dataset_name.split("_")[-2:]) not in ["correctness_rules", "format_rules", "direct_rules"]:
+                #     continue
+                # elif dataset_name.split("_")[0] in ["ai2d", "chartqa", "CLEVR", "cocorem","docvqa", "dvqa", "gaokao", "geo170k","geometry3k", "geomverse","geoqa+", "geos" \
+                # "MathV360K", "mavis", "unigeo", "super", "vqav2"]:
+
             image_root = dataset_info["root"]
             annotation_file = dataset_info["annotation"]
             with open(annotation_file, "r") as f:
                 for line in f:
                     rec = json.loads(line)
-                    rec["question"] = rec["question"].replace("<image>", "")
-                    if "<think>" not in rec["chosen"]:
-                        rec["question"] = rec["question"] + " /no_think"
+                    if "<think>" in rec["question"]:
+                        rec["system"] = "/think"
+                    else:
+                        rec["system"] = "/no_think"
                         rec["chosen"] = "<think></think>" + rec["chosen"] 
-                        rec["rejected"] = "<think></think>" +rec["rejected"]
+                        rec["rejected"] = "<think></think>" + rec["rejected"] 
+
+                    #rec = process_mmpr_example(json.loads(line))
                     if isinstance(rec["image"], str):
                         rec["image"] = [os.path.join(image_root, rec["image"])]
                     else:
                         rec["image"] = [os.path.join(image_root, image_path) for image_path in rec["image"]]
 
                     dataset.append(rec)
-        full_dataset = Dataset.from_list(dataset)
+        full_dataset = Dataset.from_list(dataset).shuffle(seed=42)
         # Create a small validation set from train data
         train_size = len(full_dataset)
-        val_size = min(10000, train_size // 10)
+        val_size = min(2000, train_size // 10)
         val_dataset = full_dataset.select(range(val_size))
         train_dataset = full_dataset.select(range(val_size, train_size))
 
