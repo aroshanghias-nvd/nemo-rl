@@ -1,7 +1,7 @@
 # GRPO Algorithm Configuration
 # Examplar script for running GRPO on Qwen2.5-VL-3B-Instruct
 grpo:
-  num_prompts_per_step: 8
+  num_prompts_per_step: 32
   num_generations_per_prompt: 16
   max_rollout_turns: 1 # for multi-turn rollouts. Math Environments just have 1 turn (answering the question)
   max_num_epochs: 1
@@ -10,7 +10,7 @@ grpo:
   use_leave_one_out_baseline: true
   val_period: 10
   val_at_start: false
-  overlong_filtering: false
+  overlong_filtering: true
   max_val_samples: 256
   val_batch_size: 256
   seed: 42
@@ -19,33 +19,34 @@ grpo:
     max_trajectory_age_steps: 1
 
 loss_fn:
-  reference_policy_kl_penalty: 0.01
+  reference_policy_kl_penalty: 0.0
   ratio_clip_min: 0.2
   ratio_clip_max: 0.2
   ratio_clip_c: null
   # (default off) loss formulation improvements (docs/guides/grpo.md#loss)
   use_on_policy_kl_approximation: false
   use_importance_sampling_correction: false
-  token_level_loss: true
+  sequence_level_importance_ratios: true  # gspo
+  token_level_loss: false  # gspo
 
 checkpointing:
   enabled: true
-  checkpoint_dir: "results/clevr_grpo_${policy.model_name}"
+  checkpoint_dir: "results/grpo_internvl_vision_r1_dev"
   metric_name: "val_reward"
   higher_is_better: true
   keep_top_k: 3
   save_period: 10
-  checkpoint_must_save_by: null
+  checkpoint_must_save_by: "00:03:45:00"  # assuming 4 hour slurm jobs
 
 policy:
-  model_name: "OpenGVLab/InternVL3_5-4B-HF"
+  model_name: "OpenGVLab/InternVL3_5-4B-MPO"
   tokenizer:
-    name: ${policy.model_name} ## specify if you'd like to use a tokenizer different from the model's default
-  train_global_batch_size: 128
-  train_micro_batch_size: 1
+    name: "OpenGVLab/InternVL3_5-4B-HF"
+  train_global_batch_size: 512
+  train_micro_batch_size: 8
   generation_batch_size: 32 # Only used when generating using HF backend
-  logprob_batch_size: 4
-  max_total_sequence_length: 3072
+  logprob_batch_size: 8
+  max_total_sequence_length: 16384
   precision: "bfloat16"
 
   dtensor_cfg:
@@ -53,74 +54,11 @@ policy:
     enabled: true
     cpu_offload: False
     sequence_parallel: false
-    activation_checkpointing: false
+    activation_checkpointing: true
     tensor_parallel_size: 1
     context_parallel_size: 1
     custom_parallel_plan: null
-
-  megatron_cfg:
-    enabled: false
-    empty_unused_memory_level: 0
-    activation_checkpointing: false
-    converter_type: "Qwen2ForCausalLM"
-    tensor_model_parallel_size: 1
-    expert_tensor_parallel_size: 1
-    expert_model_parallel_size: 1
-    pipeline_model_parallel_size: 1
-    num_layers_in_first_pipeline_stage: null
-    num_layers_in_last_pipeline_stage: null
-    context_parallel_size: 1
-    pipeline_dtype: ${policy.precision}
-    sequence_parallel: false
-    freeze_moe_router: true
-    moe_router_dtype: "fp64"
-    moe_router_load_balancing_type: "none" # "seq_aux_loss" causes logprob error divergence for grpo
-    moe_router_bias_update_rate: 0.0 # by default, disable bias updates for grpo
-    moe_permute_fusion: false
-    #gives ~20% training perf speedup with sequence packing
-    apply_rope_fusion: True
-    defer_fp32_logits: null
-
-    optimizer:
-      optimizer: "adam"
-      lr: 5.0e-6
-      min_lr: 5.0e-7
-      weight_decay: 0.01
-      bf16: true
-      fp16: false
-      params_dtype: "float32"
-
-      #adam
-      adam_beta1: 0.9
-      adam_beta2: 0.999
-      adam_eps: 1e-8
-
-      #sgd
-      sgd_momentum: 0.9
-
-      #distributed optimizer
-      use_distributed_optimizer: true
-      use_precision_aware_optimizer: true
-
-      clip_grad: ${policy.max_grad_norm}
-
-    scheduler:
-      start_weight_decay: ${policy.megatron_cfg.optimizer.weight_decay}
-      end_weight_decay: ${policy.megatron_cfg.optimizer.weight_decay}
-      weight_decay_incr_style: "constant"
-      lr_decay_style: "constant"
-      lr_decay_iters: 1000
-      lr_warmup_iters: 13
-      lr_warmup_init: 5.0e-7
-
-    distributed_data_parallel_config:
-      grad_reduce_in_fp32: false
-      overlap_grad_reduce: true
-      overlap_param_gather: true
-      average_in_collective: true
-      use_custom_fsdp: false
-      data_parallel_sharding_strategy: "optim_grads_params"
-
+    clear_cache_every_n_steps: 1
 
   # dynamic_batching improves performance by ensuring logprob and training microbatches
   # have a sufficent number of tokens to maximize GPU utilization. Specifically, variable length
@@ -148,7 +86,7 @@ policy:
   optimizer:
     name: "torch.optim.AdamW"
     kwargs:
-      lr: 5e-6
+      lr: 1e-6
       weight_decay: 0.01
       betas: [0.9, 0.999]
       eps: 1e-8
@@ -162,17 +100,16 @@ policy:
       kwargs:
         start_factor: 0.1
         end_factor: 1.0
-        total_iters: 50
+        total_iters: 10
     - name: "torch.optim.lr_scheduler.ConstantLR"
       kwargs:
         factor: 1.0
         total_iters: 10000000000
-    - milestones: [50]
+    - milestones: [10]
 
   generation:
     backend: "vllm"
-    # max_new_tokens: ${policy.max_total_sequence_length}
-    max_new_tokens: 1024
+    max_new_tokens: ${policy.max_total_sequence_length}
     temperature: 1.0
     top_p: 1.0
     top_k: null
@@ -184,7 +121,7 @@ policy:
       tensor_parallel_size: 1
       pipeline_parallel_size: 1
       expert_parallel_size: 1
-      gpu_memory_utilization: 0.6
+      gpu_memory_utilization: 0.8
       max_model_len: ${policy.max_total_sequence_length}
       enforce_eager: False
     colocated:
@@ -198,36 +135,18 @@ policy:
 
 data:
   max_input_seq_length: ${policy.max_total_sequence_length} # upper bound, real truncation occurs at vllm.max_model_len
-  prompt_file: "examples/prompts/clevr_cogent_cot.txt"
-  system_prompt_file: null
-  dataset_name: "clevr-cogent"
-  split: "trainA"
+  prompt_file: examples/prompts/vision_r1.txt
+  system_prompt_file: examples/prompts/vision_r1_system_prompt.txt
+  dataset_name: "vision_r1"
+  split: "train"
   shuffle: true
 
 env:
-  clevr-cogent:
+  vision_r1:
     num_workers: 8
     reward_functions:
-      - name: format
-        weight: 0.2
-      - name: exact_alnum
-        weight: 0.8
-  geometry3k:
-    num_workers: 8
-    reward_functions:
-      - name: format
-        weight: 0.1
-      - name: math_expr
-        weight: 0.9
-  refcoco:
-    num_workers: 8
-    reward_functions:
-      - name: format
-        weight: 0.1
-      - name: bbox_giou
-        weight: 0.9
-        kwargs: 
-          giou_penalty_thres: 0.5
+      - name: vision_r1
+        weight: 1.0
 
 logger:
   log_dir: "logs"  # Base directory for all logs
@@ -246,5 +165,5 @@ logger:
     flush_interval: 10  # How often to flush GPU usage metrics to the loggers (in seconds)
 
 cluster:
-  gpus_per_node: 2
+  gpus_per_node: 8
   num_nodes: 1
