@@ -1,7 +1,7 @@
 # GRPO Algorithm Configuration
 # Examplar script for running GRPO on Qwen2.5-VL-3B-Instruct
 grpo:
-  num_prompts_per_step: 32
+  num_prompts_per_step: 512
   num_generations_per_prompt: 16
   max_rollout_turns: 1 # for multi-turn rollouts. Math Environments just have 1 turn (answering the question)
   max_num_epochs: 1
@@ -42,7 +42,7 @@ policy:
   model_name: "OpenGVLab/InternVL3_5-4B-MPO"
   tokenizer:
     name: "OpenGVLab/InternVL3_5-4B-HF"
-  train_global_batch_size: 512
+  train_global_batch_size: 32
   train_micro_batch_size: 8
   generation_batch_size: 32 # Only used when generating using HF backend
   logprob_batch_size: 8
