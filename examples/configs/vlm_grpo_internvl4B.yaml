@@ -1,10 +1,11 @@
 # GRPO Algorithm Configuration
 # Examplar script for running GRPO on Qwen2.5-VL-3B-Instruct
 grpo:
-  num_prompts_per_step: 512
+  # num_prompts_per_step: 512
+  num_prompts_per_step: 64
   num_generations_per_prompt: 16
   max_rollout_turns: 1 # for multi-turn rollouts. Math Environments just have 1 turn (answering the question)
-  max_num_epochs: 1
+  max_num_epochs: 100
   max_num_steps: 1000000
   normalize_rewards: true
   use_leave_one_out_baseline: true
@@ -45,10 +46,11 @@ policy:
     # https://huggingface.co/OpenGVLab/InternVL3_5-4B-HF/blob/main/chat_template.jinja
     chat_template: "{% for message in messages %}{{'<|im_start|>' + message['role'] + '\n'}}{% if message['content'] is string %}{{ message['content'] }}{% else %}{% for content in message['content'] %}{% if content['type'] == 'image' %}{{ '<image>\n' }}{% elif content['type'] == 'video' %}{{ '<video>\n' }}{% elif content['type'] == 'text' %}{{ content['text'] }}{% endif %}{% endfor %}{% endif %}{{'<|im_end|>\n'}}{% endfor %}{% if add_generation_prompt %}{{'<|im_start|>assistant\n' }}{% endif %}"
   train_global_batch_size: 32
-  train_micro_batch_size: 8
+  train_micro_batch_size: 2
   generation_batch_size: 32 # Only used when generating using HF backend
-  logprob_batch_size: 8
-  max_total_sequence_length: 16384
+  logprob_batch_size: 4
+  # max_total_sequence_length: 16384
+  max_total_sequence_length: 8192
   precision: "bfloat16"
 
   dtensor_cfg:
