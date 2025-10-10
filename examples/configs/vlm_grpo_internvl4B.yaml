@@ -41,7 +41,9 @@ checkpointing:
 policy:
   model_name: "OpenGVLab/InternVL3_5-4B-MPO"
   tokenizer:
-    name: "OpenGVLab/InternVL3_5-4B-HF"
+    name: ${policy.model_name}
+    # https://huggingface.co/OpenGVLab/InternVL3_5-4B-HF/blob/main/chat_template.jinja
+    chat_template: "{% for message in messages %}{{'<|im_start|>' + message['role'] + '\n'}}{% if message['content'] is string %}{{ message['content'] }}{% else %}{% for content in message['content'] %}{% if content['type'] == 'image' %}{{ '<image>\n' }}{% elif content['type'] == 'video' %}{{ '<video>\n' }}{% elif content['type'] == 'text' %}{{ content['text'] }}{% endif %}{% endfor %}{% endif %}{{'<|im_end|>\n'}}{% endfor %}{% if add_generation_prompt %}{{'<|im_start|>assistant\n' }}{% endif %}"
   train_global_batch_size: 32
   train_micro_batch_size: 8
   generation_batch_size: 32 # Only used when generating using HF backend

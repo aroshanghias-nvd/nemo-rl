@@ -288,6 +288,9 @@ class DTensorPolicyWorker:
                 trust_remote_code=True,
             )
 
+        if self.model.__class__.__name__ == "InternVLChatModel":
+            self.model.img_context_token_id = self.tokenizer.convert_tokens_to_ids("<IMG_CONTEXT>")
+
         if self.model.config.pad_token_id is None:
             self.model.config.pad_token_id = tokenizer.pad_token_id
 

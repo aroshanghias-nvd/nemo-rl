@@ -234,6 +234,13 @@ def get_tokenizer(
         processor = AutoProcessor.from_pretrained(
             tokenizer_config["name"], trust_remote_code=True, use_fast=True
         )
+        if not hasattr(processor, "tokenizer") and "InternVL" in tokenizer_config["name"]:
+            # InternVL native checkpoint lacks a processor
+            from nemo_rl.models.internvl import InternVLProcessor
+            from transformers import AutoConfig
+
+            processor_config = AutoConfig.from_pretrained(tokenizer_config["name"], trust_remote_code=True)
+            processor = InternVLProcessor(processor, processor_config)
         tokenizer = processor.tokenizer
     else:
         tokenizer = AutoTokenizer.from_pretrained(
