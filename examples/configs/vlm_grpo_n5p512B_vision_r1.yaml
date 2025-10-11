@@ -5,7 +5,7 @@ grpo:
   num_prompts_per_step: 64
   num_generations_per_prompt: 16
   max_rollout_turns: 1 # for multi-turn rollouts. Math Environments just have 1 turn (answering the question)
-  max_num_epochs: 1
+  max_num_epochs: 100
   max_num_steps: 1000000
   normalize_rewards: true
   use_leave_one_out_baseline: true
@@ -29,10 +29,10 @@ loss_fn:
 
 checkpointing:
   enabled: true
-  checkpoint_dir: "results/grpo_nano_vl_vision_r1_dev"
+  checkpoint_dir: "results/grpo_n5p512B_vision_r1_dev"
   metric_name: "val_reward"
   higher_is_better: true
-  keep_top_k: 50
+  keep_top_k: 30
   save_period: 10
   checkpoint_must_save_by: "00:03:45:00"  # assuming 4 hour slurm jobs
 
@@ -125,23 +125,19 @@ policy:
         num_nodes: null # Decides number of nodes to be dedicated to generation
 
 data:
-  max_input_seq_length: ${policy.max_total_sequence_length}
-  prompt_file: examples/prompts/mmpr_tiny.txt
-  system_prompt_file: examples/prompts/mmpr_tiny_system_prompt.txt
-  dataset_name: "mmpr_tiny"
+  max_input_seq_length: ${policy.max_total_sequence_length} # upper bound, real truncation occurs at vllm.max_model_len
+  prompt_file: examples/prompts/vision_r1.txt
+  system_prompt_file: examples/prompts/vision_r1_system_prompt.txt
+  dataset_name: "vision_r1"
   split: "train"
   shuffle: true
-  val_size: 500  # Number of samples for validation (default 500, set to 0 to use all for training)
-  cache_dir: "/lustre/fsw/portfolios/llmservice/users/ikarmanov/rl_datasets/mmpr_tiny_images"
 
 env:
-  mmpr_tiny:
+  vision_r1:
     num_workers: 8
     reward_functions:
-      - name: verl_geo3k  # Exact replication of verl's geo3k.py (fixed regex)
+      - name: vision_r1
         weight: 1.0
-        kwargs:
-          format_score: 0.1  # Default from verl (accuracy = 1.0 - 0.1 = 0.9)
 
 logger:
   log_dir: "logs"  # Base directory for all logs
