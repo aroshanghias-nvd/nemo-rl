@@ -1353,6 +1353,18 @@ http = [
 ]
 
 [[package]]
+name = "ftfy"
+version = "6.3.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "wcwidth" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a5/d3/8650919bc3c7c6e90ee3fa7fd618bf373cbbe55dff043bd67353dbb20cd8/ftfy-6.3.1.tar.gz", hash = "sha256:9b3c3d90f84fb267fe64d375a07b7f8912d817cf86009ae134aa03e1819506ec", size = 308927, upload-time = "2024-10-26T00:50:35.149Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ab/6e/81d47999aebc1b155f81eca4477a616a70f238a2549848c38983f3c22a82/ftfy-6.3.1-py3-none-any.whl", hash = "sha256:7c70eb532015cd2f9adb53f101fb6c7945988d023a085d127d1573dc49dd0083", size = 44821, upload-time = "2024-10-26T00:50:33.425Z" },
+]
+
+[[package]]
 name = "gguf"
 version = "0.17.1"
 source = { registry = "https://pypi.org/simple" }
@@ -2206,6 +2218,15 @@ wheels = [
 ]
 
 [[package]]
+name = "mathruler"
+version = "0.1.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/31/0b/cb3d2332f2e821752782cecd4aab40c7c73d00738f3f783050bff873915c/mathruler-0.1.0.tar.gz", hash = "sha256:38f02b5c5c12efcf2f20f70a5fde1d74d177615f873b2b8719a18e1ca1e4fb04", size = 15251, upload-time = "2025-02-22T03:25:10.839Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/54/a5/91d16d65b66251c2423bfedb9219c2e803f11d91af9bfba75f05ddc33bfb/mathruler-0.1.0-py3-none-any.whl", hash = "sha256:e8ce0d9e07e892bf971fbff5e6eee330f6a66fd022666c99828a0000c788079f", size = 15190, upload-time = "2025-02-22T03:25:09.85Z" },
+]
+
+[[package]]
 name = "matplotlib"
 version = "3.10.5"
 source = { registry = "https://pypi.org/simple" }
@@ -2898,11 +2919,14 @@ source = { editable = "." }
 dependencies = [
     { name = "accelerate" },
     { name = "blobfile" },
+    { name = "causal-conv1d" },
     { name = "colored" },
     { name = "datasets" },
     { name = "debugpy" },
     { name = "hydra-core" },
+    { name = "mamba-ssm" },
     { name = "math-verify" },
+    { name = "mathruler" },
     { name = "matplotlib" },
     { name = "mlflow" },
     { name = "ninja" },
@@ -2912,8 +2936,10 @@ dependencies = [
     { name = "nvidia-nvshmem-cu12" },
     { name = "nvtx" },
     { name = "omegaconf" },
+    { name = "open-clip-torch" },
     { name = "pillow" },
     { name = "plotly" },
+    { name = "pylatexenc" },
     { name = "ray", extra = ["default"] },
     { name = "rich" },
     { name = "setuptools" },
@@ -2921,6 +2947,7 @@ dependencies = [
     { name = "sympy" },
     { name = "tensorboard" },
     { name = "tiktoken" },
+    { name = "timm" },
     { name = "torch", version = "2.7.1", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'darwin'" },
     { name = "torch", version = "2.7.1+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "sys_platform != 'darwin'" },
     { name = "torchdata" },
@@ -2998,6 +3025,7 @@ test = [
 requires-dist = [
     { name = "accelerate", specifier = ">=0.26" },
     { name = "blobfile" },
+    { name = "causal-conv1d", git = "https://github.com/Dao-AILab/causal-conv1d?tag=v1.5.0.post8" },
     { name = "causal-conv1d", marker = "extra == 'automodel'", git = "https://github.com/Dao-AILab/causal-conv1d?tag=v1.5.0.post8" },
     { name = "causal-conv1d", marker = "extra == 'vllm'", git = "https://github.com/Dao-AILab/causal-conv1d?tag=v1.5.0.post8" },
     { name = "colored", specifier = "==2.2.3" },
@@ -3010,9 +3038,11 @@ requires-dist = [
     { name = "flash-attn", marker = "extra == 'mcore'", specifier = "==2.7.4.post1" },
     { name = "flash-attn", marker = "extra == 'vllm'", specifier = "==2.7.4.post1" },
     { name = "hydra-core" },
+    { name = "mamba-ssm", git = "https://github.com/state-spaces/mamba.git?rev=2e16fc3062cdcd4ebef27a9aa4442676e1c7edf4" },
     { name = "mamba-ssm", marker = "extra == 'automodel'", git = "https://github.com/state-spaces/mamba.git?rev=2e16fc3062cdcd4ebef27a9aa4442676e1c7edf4" },
     { name = "mamba-ssm", marker = "extra == 'vllm'", git = "https://github.com/state-spaces/mamba.git?rev=2e16fc3062cdcd4ebef27a9aa4442676e1c7edf4" },
     { name = "math-verify" },
+    { name = "mathruler" },
     { name = "matplotlib" },
     { name = "megatron-bridge", marker = "extra == 'mcore'", editable = "3rdparty/Megatron-Bridge-workspace" },
     { name = "megatron-core", marker = "extra == 'mcore'", editable = "3rdparty/Megatron-LM-workspace" },
@@ -3026,8 +3056,10 @@ requires-dist = [
     { name = "nvidia-nvshmem-cu12" },
     { name = "nvtx" },
     { name = "omegaconf" },
+    { name = "open-clip-torch" },
     { name = "pillow", specifier = ">=11.3.0" },
     { name = "plotly" },
+    { name = "pylatexenc" },
     { name = "ray", extras = ["default"], specifier = "==2.46.0" },
     { name = "rich" },
     { name = "setuptools" },
@@ -3035,6 +3067,7 @@ requires-dist = [
     { name = "sympy", specifier = ">=1.14.0" },
     { name = "tensorboard" },
     { name = "tiktoken" },
+    { name = "timm" },
     { name = "torch", marker = "sys_platform != 'darwin'", specifier = "==2.7.1", index = "https://download.pytorch.org/whl/cu128" },
     { name = "torch", marker = "sys_platform == 'darwin'", specifier = "==2.7.1", index = "https://pypi.org/simple" },
     { name = "torchdata" },
@@ -3620,6 +3653,28 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/a8/9f/45aed9951d3fa50a97b910487186ef9c15ad08d3c9cb3605aabd99f65f92/onnxscript-0.4.0.tar.gz", hash = "sha256:de618eeb6e0c57f5a70f85909ab1f829cbb2053ad55f8f2fcc2701fa29b7adfc", size = 567393, upload-time = "2025-08-22T21:05:46.416Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ec/b6/c1ca749dfe58c23da542b1c71c334a3faa7191647b3335623870ef371e93/onnxscript-0.4.0-py3-none-any.whl", hash = "sha256:3d41f5b190bab9f1a4ace6075c6960ad676719766240b3450f292173bde90242", size = 660871, upload-time = "2025-08-22T21:05:48.332Z" },
+]
+
+[[package]]
+name = "open-clip-torch"
+version = "2.32.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "ftfy" },
+    { name = "huggingface-hub" },
+    { name = "regex" },
+    { name = "safetensors" },
+    { name = "timm" },
+    { name = "torch", version = "2.7.1", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'darwin'" },
+    { name = "torch", version = "2.7.1+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "sys_platform != 'darwin'" },
+    { name = "torchvision", version = "0.22.1", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "platform_machine == 'aarch64' and sys_platform == 'linux'" },
+    { name = "torchvision", version = "0.22.1", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'darwin'" },
+    { name = "torchvision", version = "0.22.1+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux')" },
+    { name = "tqdm" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/6d/7b/fd38dfd522968135dce71d0b543c2ae776f9c8e27df6ad46b63bab09eef7/open_clip_torch-2.32.0.tar.gz", hash = "sha256:0220bc111162527eb738c1fe20dbfd6ea45dfe44726b54a4de18d3945d8f2f00", size = 1491248, upload-time = "2025-04-05T21:55:24.51Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/32/f9/0458745c1d299411161ee3b6c32228a3de0be1d8497d779fd7f17a8e96aa/open_clip_torch-2.32.0-py3-none-any.whl", hash = "sha256:80b35b43e37afc2b6173aa5ab0ad68744ab3a3211e624f72dfe743a162707637", size = 1528783, upload-time = "2025-04-05T21:55:22.967Z" },
 ]
 
 [[package]]
@@ -4452,6 +4507,12 @@ sdist = { url = "https://files.pythonhosted.org/packages/b0/77/a5b8c569bf593b014
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c7/21/705964c7812476f378728bdf590ca4b771ec72385c533964653c68e86bdc/pygments-2.19.2-py3-none-any.whl", hash = "sha256:86540386c03d588bb81d44bc3928634ff26449851e99741617ecb9037ee5ec0b", size = 1225217, upload-time = "2025-06-21T13:39:07.939Z" },
 ]
+
+[[package]]
+name = "pylatexenc"
+version = "2.10"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/5d/ab/34ec41718af73c00119d0351b7a2531d2ebddb51833a36448fc7b862be60/pylatexenc-2.10.tar.gz", hash = "sha256:3dd8fd84eb46dc30bee1e23eaab8d8fb5a7f507347b23e5f38ad9675c84f40d3", size = 162597, upload-time = "2021-04-06T07:56:07.854Z" }
 
 [[package]]
 name = "pynvml"
