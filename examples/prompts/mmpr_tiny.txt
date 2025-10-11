@@ -1,0 +1,4 @@
+The following is a visual math problem.
+Solve it step by step.
+Note: The question will specify the final answer format.
+Problem: {}

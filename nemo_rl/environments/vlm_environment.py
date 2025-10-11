@@ -79,6 +79,9 @@ class VLMVerifyWorker:
                 reward_func = bbox_giou_reward
             elif reward_func_name == "vision_r1":
                 reward_func = vision_r1_reward
+            elif reward_func_name == "verl_geo3k":
+                from nemo_rl.environments.rewards import verl_geo3k_reward
+                reward_func = verl_geo3k_reward
             else:
                 raise ValueError(f"Invalid reward function: {reward_func_name}")
 
@@ -109,15 +112,14 @@ class VLMVerifyWorker:
         results = []
         for response, ground_truth in zip(pred_responses, ground_truths):
             try:
-                with _mute_output():
-                    try:
-                        ret_score, _ = self.verify_func(ground_truth, response)
-                    except Exception as e:
-                        ret_score = 0.0
-                        print(f"Error in verify_func: {e}")
+                # Don't mute output - we need to see errors and warnings!
+                ret_score, _ = self.verify_func(ground_truth, response)
                 results.append(float(ret_score))
             except Exception as e:
+                # Only catch truly unexpected exceptions (reward functions should handle their own)
                 print(f"Error in verify: {e}")
+                import traceback
+                traceback.print_exc()
                 results.append(0.0)
         return results
 
@@ -133,7 +135,7 @@ class VLMEnvironment(EnvironmentInterface):
         self.num_workers = cfg["num_workers"]
         self.workers = [
             VLMVerifyWorker.options(  # type: ignore # (decorated with @ray.remote)
-                runtime_env={"py_executable": PY_EXECUTABLES.SYSTEM}
+                runtime_env={"py_executable": PY_EXECUTABLES.BASE}  # Use BASE for mathruler support
             ).remote(cfg)
             for _ in range(self.num_workers)
         ]

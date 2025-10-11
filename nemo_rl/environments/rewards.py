@@ -18,6 +18,7 @@ import numpy as np
 from math_verify.errors import TimeoutException
 from math_verify.metric import math_metric
 from math_verify.parser import ExprExtractionConfig, LatexExtractionConfig
+from mathruler.grader import extract_boxed_content, grade_answer
 
 # initialize math_verify_func once
 math_verify_func = math_metric(
@@ -229,3 +230,54 @@ def vision_r1_reward(
             return correct_reward, True
 
     return format_reward, False
+
+
+def verl_geo3k_reward(
+    ground_truth: str,
+    response: str,
+    format_score: float = 0.1,
+) -> tuple[float, bool]:
+    """Reward function for MMPR-Tiny task following verl's geo3k implementation.
+    
+    Exact replication of: https://github.com/volcengine/verl/blob/main/verl/utils/reward_score/geo3k.py
+    
+    Args:
+        ground_truth: The correct answer
+        response: Model's complete response (with <think> and \\boxed{})
+        format_score: Weight for format check (default 0.1 = 10%)
+    
+    Returns:
+        (reward, is_correct) where reward = (1-format_score)*accuracy + format_score*format
+    """
+    # Format check (relaxed to accept missing opening <think> tag)
+    # Original verl regex used fullmatch: r"<think>.*</think>.*\\boxed\{.*\}.*"
+    # Modified to use search() to handle nested braces like \boxed{\dfrac{3}{20}}
+    # Only requires </think> tag (not opening <think>) and \boxed{} with closing brace
+    format_pattern = re.compile(r"</think>.*\\boxed\{.*\}", re.DOTALL)
+    has_format = bool(re.search(format_pattern, response))
+    format_reward_value = 1.0 if has_format else 0.0
+    
+    # Accuracy check (verl's exact approach)
+    try:
+        answer = extract_boxed_content(response)
+        is_correct = grade_answer(answer, ground_truth)
+        acc_reward_value = 1.0 if is_correct else 0.0
+    except Exception as e:
+        print("=" * 80)
+        print("MATHRULER FAILED")
+        print("=" * 80)
+        print(f"Exception type: {type(e).__name__}")
+        print(f"Exception message: {e}")
+        print(f"Ground truth: '{ground_truth}'")
+        print(f"Response snippet: {response[:500]}...")
+        print("=" * 80)
+        import traceback
+        traceback.print_exc()
+        print("=" * 80)
+        acc_reward_value = 0.0
+        is_correct = False
+    
+    # Weighted combination (verl's exact formula)
+    final_reward = (1.0 - format_score) * acc_reward_value + format_score * format_reward_value
+
+    return final_reward, is_correct
