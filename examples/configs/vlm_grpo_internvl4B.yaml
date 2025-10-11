@@ -15,6 +15,9 @@ grpo:
   max_val_samples: 256
   val_batch_size: 256
   seed: 42
+  async_grpo:
+    enabled: false
+    max_trajectory_age_steps: 1
 
 loss_fn:
   reference_policy_kl_penalty: 0.0
@@ -29,7 +32,7 @@ loss_fn:
 
 checkpointing:
   enabled: true
-  checkpoint_dir: "results/grpo_nano_vl_vision_r1_dev"
+  checkpoint_dir: "results/grpo_internvl_vision_r1_dev"
   metric_name: "val_reward"
   higher_is_better: true
   keep_top_k: 30
@@ -37,21 +40,21 @@ checkpointing:
   checkpoint_must_save_by: "00:03:45:00"  # assuming 4 hour slurm jobs
 
 policy:
-  # model_name: "/lustre/fs1/portfolios/llmservice/users/jseppanen/checkpoints/nano_vl_v1347_nemorl"
-  model_name: "/lustre/fs1/portfolios/llmservice/users/jseppanen/checkpoints/sft_n5p5_12b_49152_13p51_txt_video_cot_lcb_recovery_0922_iter_0002653_hf/nemorl"
+  model_name: "OpenGVLab/InternVL3_5-4B-MPO"
   tokenizer:
-    name: ${policy.model_name} ## specify if you'd like to use a tokenizer different from the model's default
-    # chat template used in SFT
-    chat_template: "{% for message in messages %}{% set content = message['content'] %}{% if message['role'] == 'system' %}{{ '<SPECIAL_10>System\n' + content.replace('/think', '').replace('/no_think', '').strip() + '\n' }}{% elif message['role'] == 'user' %}{{ '<SPECIAL_11>User\n' + content.replace('/think', '').replace('/no_think', '').strip() + '\n' }}{% elif message['role'] == 'assistant' %}{{ '<SPECIAL_11>Assistant\n' + content.strip() + '\n<SPECIAL_12>\n' }}{% endif %}{% endfor %}"
+    name: ${policy.model_name}
+    # https://huggingface.co/OpenGVLab/InternVL3_5-4B-HF/blob/main/chat_template.jinja
+    chat_template: "{% for message in messages %}{{'<|im_start|>' + message['role'] + '\n'}}{% if message['content'] is string %}{{ message['content'] }}{% else %}{% for content in message['content'] %}{% if content['type'] == 'image' %}{{ '<image>\n' }}{% elif content['type'] == 'video' %}{{ '<video>\n' }}{% elif content['type'] == 'text' %}{{ content['text'] }}{% endif %}{% endfor %}{% endif %}{{'<|im_end|>\n'}}{% endfor %}{% if add_generation_prompt %}{{'<|im_start|>assistant\n' }}{% endif %}"
   train_global_batch_size: 32
   train_micro_batch_size: 2
   generation_batch_size: 32 # Only used when generating using HF backend
-  logprob_batch_size: 2
+  logprob_batch_size: 4
+  # max_total_sequence_length: 16384
   max_total_sequence_length: 8192
   precision: "bfloat16"
 
   dtensor_cfg:
-    # _v2: true
+    _v2: false
     enabled: true
     cpu_offload: False
     sequence_parallel: false
@@ -79,13 +82,17 @@ policy:
 
   sequence_packing:
     enabled: False
+    train_mb_tokens: ${mul:${policy.max_total_sequence_length}, ${policy.train_micro_batch_size}}
+    logprob_mb_tokens: ${mul:${policy.max_total_sequence_length}, ${policy.logprob_batch_size}}
+    algorithm: "modified_first_fit_decreasing"
+    sequence_length_round: 64
 
   optimizer:
     name: "torch.optim.AdamW"
     kwargs:
       lr: 1e-6
       weight_decay: 0.01
-      betas: [0.9, 0.99]
+      betas: [0.9, 0.999]
       eps: 1e-8
       # when using Dtensor, we need to set foreach
       # and fused to False
@@ -101,8 +108,8 @@ policy:
   generation:
     backend: "vllm"
     max_new_tokens: ${policy.max_total_sequence_length}
-    temperature: 0.7
-    top_p: 1.0  # NB. megatron-rl uses 0.9 but nemo-rl doesn't support top-p
+    temperature: 1.0
+    top_p: 1.0
     top_k: null
     stop_token_ids: null
     stop_strings: null
@@ -112,7 +119,7 @@ policy:
       tensor_parallel_size: 1
       pipeline_parallel_size: 1
       expert_parallel_size: 1
-      gpu_memory_utilization: 0.9
+      gpu_memory_utilization: 0.8
       max_model_len: ${policy.max_total_sequence_length}
       enforce_eager: False
     colocated:
@@ -144,12 +151,12 @@ logger:
   num_val_samples_to_print: 0 # Number of validation samples to pretty print on terminal
   wandb_enabled: false
   tensorboard_enabled: true
-  mlflow_enabled: false  # Disable MLflow logging
   swanlab_enabled: false # Disable SwanLab logging
-  monitor_gpus: true  # If true, will monitor GPU usage and log to wandb and/or tensorboard
+  mlflow_enabled: false  # Disable MLflow logging
+  monitor_gpus: false  # If true, will monitor GPU usage and log to wandb and/or tensorboard
   wandb:
     project: "grpo-dev"
-    name: "grpo-dev"
+    name: "grpo-dev-logger"
   tensorboard: {}
   gpu_monitoring:
     collection_interval: 10  # How often to collect GPU usage metrics (in seconds)
