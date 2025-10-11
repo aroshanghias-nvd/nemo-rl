@@ -1,3 +1,6 @@
+# !!! Note: I haven't gotten the HF converted weights to train correctly,
+# !!! so use the InternVL native checkpoints instead.
+
 import json
 import os
 import re
