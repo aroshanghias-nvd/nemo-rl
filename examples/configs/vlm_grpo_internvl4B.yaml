@@ -35,7 +35,7 @@ checkpointing:
   checkpoint_dir: "results/grpo_internvl_vision_r1_dev"
   metric_name: "val_reward"
   higher_is_better: true
-  keep_top_k: 3
+  keep_top_k: 30
   save_period: 10
   checkpoint_must_save_by: "00:03:45:00"  # assuming 4 hour slurm jobs
 
