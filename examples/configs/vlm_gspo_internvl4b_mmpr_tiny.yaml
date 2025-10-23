@@ -125,8 +125,8 @@ policy:
 
 data:
   max_input_seq_length: ${policy.max_total_sequence_length}
-  prompt_file: examples/prompts/mmpr_tiny.txt
-  system_prompt_file: examples/prompts/mmpr_tiny_system_prompt.txt
+  prompt_file: null
+  system_prompt_file: examples/prompts/internvl_r1_system_prompt.txt
   dataset_name: "mmpr_tiny"
   split: "train"
   shuffle: true

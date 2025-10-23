@@ -127,7 +127,7 @@ policy:
 data:
   max_input_seq_length: ${policy.max_total_sequence_length} # upper bound, real truncation occurs at vllm.max_model_len
   prompt_file: examples/prompts/vision_r1.txt
-  system_prompt_file: examples/prompts/vision_r1_system_prompt.txt
+  system_prompt_file: examples/prompts/nemotron_system_prompt.txt
   dataset_name: "vision_r1"
   split: "train"
   shuffle: true
