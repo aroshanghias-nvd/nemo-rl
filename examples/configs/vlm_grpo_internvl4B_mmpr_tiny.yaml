@@ -1,6 +1,5 @@
 grpo:
-  # num_prompts_per_step: 512
-  num_prompts_per_step: 64
+  num_prompts_per_step: 512
   num_generations_per_prompt: 16
   max_rollout_turns: 1 # for multi-turn rollouts. Math Environments just have 1 turn (answering the question)
   max_num_epochs: 1
@@ -44,18 +43,19 @@ policy:
     # https://huggingface.co/OpenGVLab/InternVL3_5-4B-HF/blob/main/chat_template.jinja
     # https://github.com/Weiyun1025/verl-internvl/blob/3950bc4/verl/utils/tokenizer.py#L78
     chat_template: "{% for message in messages %}{{'<|im_start|>' + message['role'] + '\n'}}{% if message['content'] is string %}{{ message['content'] }}{% else %}{% for content in message['content'] %}{% if content['type'] == 'image' %}{{ '<image>\n' }}{% elif content['type'] == 'video' %}{{ '<video>\n' }}{% elif content['type'] == 'text' %}{{ content['text'] }}{% endif %}{% endfor %}{% endif %}{{'<|im_end|>\n'}}{% endfor %}{% if add_generation_prompt %}{{'<|im_start|>assistant\n' }}{% endif %}"
-  train_global_batch_size: 32
-  train_micro_batch_size: 2
+  # NB. verl ppo_mini_batch_size is in terms of prompts while nemo-rl is in terms of rollouts
+  # so need to multiply verl number by num_generations_per_prompt
+  train_global_batch_size: 512
+  train_micro_batch_size: 1
   generation_batch_size: 32 # Only used when generating using HF backend
-  logprob_batch_size: 4
-  # max_total_sequence_length: 16384
-  max_total_sequence_length: 8192
+  logprob_batch_size: 1
+  max_total_sequence_length: 16384
   precision: "bfloat16"
 
   dtensor_cfg:
     _v2: false
     enabled: true
-    cpu_offload: False
+    cpu_offload: true
     sequence_parallel: false
     activation_checkpointing: true
     tensor_parallel_size: 1
@@ -114,9 +114,10 @@ policy:
       tensor_parallel_size: 1
       pipeline_parallel_size: 1
       expert_parallel_size: 1
-      gpu_memory_utilization: 0.9
+      gpu_memory_utilization: 0.8
       max_model_len: ${policy.max_total_sequence_length}
       enforce_eager: False
+      limit_mm_per_prompt: {"image": 12}
     colocated:
       # true: generation shares training GPUs
       # false: uses dedicated generation resources
@@ -152,7 +153,7 @@ logger:
   tensorboard_enabled: true
   swanlab_enabled: false # Disable SwanLab logging
   mlflow_enabled: false  # Disable MLflow logging
-  monitor_gpus: false  # If true, will monitor GPU usage and log to wandb and/or tensorboard
+  monitor_gpus: true  # If true, will monitor GPU usage and log to wandb and/or tensorboard
   wandb:
     project: "grpo-dev"
     name: "grpo-dev-logger"
