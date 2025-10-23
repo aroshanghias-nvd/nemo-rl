@@ -855,6 +855,13 @@ class BatchedDataDict(UserDict, Generic[DictT]):
                 )
         return selected_batch
 
+    def as_shuffled(self, *, generator: Optional[torch.Generator] = None) -> Self:
+        """Return a shuffled view along the batch dimension."""
+        if self.size == 0:
+            return type(self)()
+        permutation = torch.randperm(self.size, generator=generator)
+        return self.select_indices(permutation)
+
     def get_dict(self) -> dict[Any, Any]:
         """Get the underlying data dictionary."""
         return self.data

@@ -822,7 +822,7 @@ def grpo_train(
 
                 print("▶ Training policy...", flush=True)
                 with timer.time("policy_training"):
-                    train_results = policy.train(train_data, loss_fn)
+                    train_results = policy.train(train_data.as_shuffled(), loss_fn)
 
                 is_last_step = (total_steps + 1 >= max_num_steps) or (
                     (current_epoch + 1 == max_num_epochs)
@@ -1596,7 +1596,7 @@ def async_grpo_train(
 
                 print("▶ Training policy...")
                 with timer.time("policy_training"):
-                    train_results = policy.train(train_data, loss_fn)
+                    train_results = policy.train(train_data.as_shuffled(), loss_fn)
 
                 print("🔄 Synchronizing policy weights to trajectory collector…")
                 if NEED_REFIT:
