@@ -97,6 +97,7 @@ class GRPOConfig(TypedDict):
     seed: int
     async_grpo: NotRequired[AsyncGRPOConfig]
     overlong_filtering: NotRequired[bool]
+    zero_variance_prompt_filtering: NotRequired[bool]
 
 
 class GRPOSaveState(TypedDict):
@@ -745,17 +746,24 @@ def grpo_train(
 
                     advantage_clip = master_config["grpo"].get("advantage_clip", 10.0)
                     advantages = torch.clamp(advantages, min=-advantage_clip, max=advantage_clip)
+                    zero_var_mask = std == 0
 
                 with timer.time("data_processing"):
                     use_overlong_filtering = master_config["grpo"]["overlong_filtering"]
-                    if use_overlong_filtering:
+                    use_zero_variance_prompt_filtering = master_config["grpo"].get(
+                        "zero_variance_prompt_filtering", False
+                    )
+                    if use_overlong_filtering or use_zero_variance_prompt_filtering:
                         loss_multiplier = repeated_batch["loss_multiplier"].clone()
-                        truncated = repeated_batch["truncated"]
+                        if use_overlong_filtering:
+                            truncated = repeated_batch["truncated"]
 
-                        if isinstance(truncated, list):
-                            truncated = torch.tensor(truncated, dtype=torch.bool)
+                            if isinstance(truncated, list):
+                                truncated = torch.tensor(truncated, dtype=torch.bool)
 
-                        loss_multiplier[truncated] = 0
+                            loss_multiplier[truncated] = 0
+                        if use_zero_variance_prompt_filtering:
+                            loss_multiplier[zero_var_mask] = 0
                         repeated_batch["loss_multiplier"] = loss_multiplier
                     # Add loss mask and advantages to each message in LLMMessageLogType
                     for i, message_log in enumerate(repeated_batch["message_log"]):
@@ -1531,9 +1539,17 @@ def async_grpo_train(
                         print(
                             f"  📊 Normalized advantages stats: min={advantages.min():.4f}, max={advantages.max():.4f}, mean={advantages.mean():.4f}, std={advantages.std():.4f}"
                         )
+                    zero_var_mask = std == 0
 
                 # Prepare training data (same as sync version)
                 with timer.time("data_processing"):
+                    use_zero_variance_prompt_filtering = master_config["grpo"].get(
+                        "zero_variance_prompt_filtering", False
+                    )
+                    if use_zero_variance_prompt_filtering:
+                        loss_multiplier = repeated_batch["loss_multiplier"].clone()
+                        loss_multiplier[zero_var_mask] = 0
+                        repeated_batch["loss_multiplier"] = loss_multiplier
                     # Add loss mask and advantages to each message
                     for i, message_log in enumerate(repeated_batch["message_log"]):
                         for j, message in enumerate(message_log):
