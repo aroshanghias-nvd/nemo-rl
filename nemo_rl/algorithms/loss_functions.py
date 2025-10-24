@@ -584,6 +584,17 @@ class DPOLossConfig(TypedDict):
     preference_average_log_probs: bool
     sft_average_log_probs: bool
 
+class MPOLossConfig(TypedDict):
+    reference_policy_kl_penalty: float
+    preference_loss_weight: float
+    sft_loss_weight: float
+    preference_average_log_probs: bool
+    sft_average_log_probs: bool
+    bco_loss_weight: float
+    quality_average_log_probs: bool
+
+    reward_shift_momentum: float
+    reward_shift: float
 
 class DPOLossDataDict(TypedDict):
     """Required keys for the DPO loss function."""
@@ -1110,3 +1121,254 @@ class DistillationLossFn(LossFunction):
         }
 
         return kl_loss, metrics
+
+
+class MPOLossFn(PreferenceLoss):
+    """
+    Mixed Preference Optimization (MPO) loss.
+
+    Combines:
+      - DPO preference loss (inherited from DPOLossFn)
+      - BCO quality loss (this class)
+      - SFT generation loss (reuses DPOLossFn's sft loss call)
+
+    Expects config keys:
+      - reference_policy_kl_penalty (beta used by DPO & BCO)
+      - preference_loss_weight (w_p)
+      - sft_loss_weight (w_g)         # generation loss weight (paper calls w_g; earlier code uses sft)
+      - quality_loss_weight (w_q)     # weight for BCO quality loss
+      - preference_average_log_probs (bool)
+      - sft_average_log_probs (bool)
+      - quality_average_log_probs (bool)  # whether to average logprobs for BCO
+      - reward_shift_momentum (float in [0,1))  # EMA momentum for reward shift δ (default 0.99)
+    """
+
+    def __init__(self, cfg: MPOLossConfig):
+        self.reference_policy_kl_penalty = cfg["reference_policy_kl_penalty"]
+        self.preference_loss_weight = cfg["preference_loss_weight"]
+        self.sft_loss_weight = cfg["sft_loss_weight"]
+        self.preference_average_log_probs = cfg["preference_average_log_probs"]
+        self.sft_average_log_probs = cfg["sft_average_log_probs"]
+        self.sft_loss = NLLLoss()
+
+        self.loss_type = LossType.SEQUENCE_LEVEL
+        # additional MPO-specific params
+        self.quality_loss_weight = float(cfg.get("quality_loss_weight", 1.0))
+        self.quality_average_log_probs = bool(cfg.get("quality_average_log_probs", False))
+        self.reward_shift_momentum = float(cfg.get("reward_shift_momentum", 0.99))
+
+        # Initialize reward shift (δ) as zero scalar on cpu; will move to device when used
+        self.registered_device = None
+        self.reward_shift = torch.tensor(0.0)  # δ moving average
+
+        # sanity
+        if not (0.0 <= self.reward_shift_momentum < 1.0):
+            raise ValueError("reward_shift_momentum must be in [0,1)")
+
+    def _ensure_device_for_reward_shift(self, device: torch.device):
+        if self.registered_device != device:
+            self.reward_shift = self.reward_shift.to(device)
+            self.registered_device = device
+
+    def _compute_logratio_sequences(
+        self,
+        next_token_logits: Tensor,
+        data: BatchedDataDict[DPOLossDataDict],
+        vocab_parallel_rank: Optional[int] = None,
+        vocab_parallel_group: Optional[torch.distributed.ProcessGroup] = None,
+        context_parallel_group: Optional[torch.distributed.ProcessGroup] = None,
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+        ## TODO(@ashors): there's some duplicate code here with the NLLLoss function. We should refactor
+        token_mask = data["token_mask"][:, 1:]
+        sample_mask = data["sample_mask"]
+        seq_index = data.get("seq_index", None)
+
+        if vocab_parallel_group is not None:
+            assert vocab_parallel_rank is not None, (
+                "vocab_parallel_rank must be provided when vocab_parallel_group is provided"
+            )
+            token_logprobs = from_parallel_logits_to_logprobs(
+                next_token_logits,
+                data["input_ids"],
+                vocab_start_index=vocab_parallel_rank * next_token_logits.shape[-1],
+                vocab_end_index=(vocab_parallel_rank + 1) * next_token_logits.shape[-1],
+                tp_group=vocab_parallel_group,
+                inference_only=False,
+                cp_group=context_parallel_group,
+            )
+            # slice off to the correct length to remove potential CP padding
+            token_logprobs = token_logprobs[:, : data["input_ids"].shape[1] - 1]
+        elif isinstance(next_token_logits, torch.distributed.tensor.DTensor):
+            token_logprobs = get_logprobs_from_vocab_parallel_logits(
+                next_token_logits, data["input_ids"], seq_index=seq_index
+            )
+        else:
+            next_tokens = data["input_ids"][:, 1:].cuda()  # Skip first token
+            next_token_logits = next_token_logits.to(torch.float32)
+            next_token_logprobs = torch.nn.functional.log_softmax(
+                next_token_logits, dim=-1
+            )
+            logprobs = next_token_logprobs[:, :-1]  # Remove last position's logits
+            token_logprobs = logprobs.gather(
+                dim=-1, index=next_tokens.unsqueeze(-1)
+            ).squeeze(-1)
+
+        ref_logprobs = data["reference_policy_logprobs"][:, :-1]
+
+        diff = (token_logprobs - ref_logprobs) * token_mask
+
+        rewards = diff.sum(-1)
+        if self.preference_average_log_probs:
+            rewards = rewards / token_mask.sum(-1).clamp(min=1)
+
+        return rewards
+
+    def _quality_loss_bco(
+        self,
+        seq_logratio: Tensor,
+        sample_mask: Tensor,
+        global_valid_seqs: Tensor,
+        beta: float,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Compute BCO quality loss (Eq. 6 & 7 in paper):
+          Lq = L+_q + L-_q
+        where:
+          L+_q = - log σ( beta * logratio_chosen - δ )
+          L-_q = - log σ( - ( beta * logratio_rejected - δ ) )
+
+        Returns:
+          quality_loss (scalar), acc_like (fraction where chosen reward > rejected reward),
+          mean_logratio_chosen, mean_logratio_rejected
+        """
+        # seq_logratio is interleaved [c0, r0, c1, r1, ...]
+        chosen_logratio = seq_logratio[0::2]
+        rejected_logratio = seq_logratio[1::2]
+
+        # masks for chosen / rejected
+        mask_chosen = sample_mask[0::2]
+        mask_rejected = sample_mask[1::2]
+
+        # ensure reward_shift is a scalar tensor on correct device
+        device = seq_logratio.device
+        self._ensure_device_for_reward_shift(device)
+        delta = self.reward_shift.to(device)
+
+        # compute logits for BCO
+        # for chosen: z_c = beta * logratio_chosen - delta
+        z_chosen = beta * chosen_logratio - delta
+        L_plus = -torch.nn.functional.logsigmoid(z_chosen) * mask_chosen  # zero-out invalid chosen with mask
+
+        # for rejected: L_- = - log σ( - (beta * logratio_rejected - delta) )
+        z_rejected = beta * rejected_logratio - delta
+        L_minus = -torch.nn.functional.logsigmoid(-z_rejected) * mask_rejected
+
+        # average them properly (paper sums L+ and L-)
+        # Use global_normalization_factor consistent with PreferenceLoss (global_valid_seqs/2)
+        denom = (global_valid_seqs / 2.0).clamp(min=1.0)
+
+        L_plus_mean = masked_mean(L_plus, mask_chosen, global_normalization_factor=denom)
+        L_minus_mean = masked_mean(L_minus, mask_rejected, global_normalization_factor=denom)
+
+        quality_loss = L_plus_mean + L_minus_mean
+
+        # mean logratio for diagnostics
+        mean_chosen = masked_mean(chosen_logratio, mask_chosen, global_normalization_factor=denom)
+        mean_rejected = masked_mean(rejected_logratio, mask_rejected, global_normalization_factor=denom)
+
+        return quality_loss, mean_chosen, mean_rejected
+
+    def __call__(
+        self,
+        next_token_logits: Tensor,
+        data: dict,
+        global_valid_seqs: Tensor,
+        global_valid_toks: Optional[Tensor],
+        vocab_parallel_rank: Optional[int] = None,
+        vocab_parallel_group: Optional[torch.distributed.ProcessGroup] = None,
+        context_parallel_group: Optional[torch.distributed.ProcessGroup] = None,
+    ) -> tuple[torch.Tensor, dict[str, Any]]:
+        """
+        Returns:
+          - scalar MPO loss
+          - diagnostics dict:
+              loss, sft_loss, preference_loss, quality_loss, accuracy (from DPO),
+              q_accuracy (from BCO), rewards_chosen_mean, rewards_rejected_mean,
+              q_chosen_mean, q_rejected_mean, num_valid_samples
+        """
+        device = next_token_logits.device
+        sft_loss_chosen = torch.tensor(0.0, device=device)
+
+        # === SFT generation loss (L_g) ===
+        if self.sft_loss_weight > 0:
+            assert global_valid_toks is not None, "global_valid_toks must be provided for SFT loss"
+            sft_loss, _ = self.sft_loss(
+                next_token_logits,
+                data,
+                global_valid_seqs=global_valid_seqs,
+                global_valid_toks=global_valid_toks,
+                vocab_parallel_rank=vocab_parallel_rank,
+                vocab_parallel_group=vocab_parallel_group,
+                context_parallel_group=context_parallel_group,
+                dpo_loss=True,
+                dpo_average_log_probs=self.sft_average_log_probs,
+            )
+            sft_loss_chosen, _ = self.split_output_tensor(sft_loss)
+            sft_loss_chosen = masked_mean(
+                sft_loss_chosen,
+                data["sample_mask"][::2],
+                global_normalization_factor=global_valid_seqs / 2,
+            )
+
+        # === Preference loss (L_p) via DPOLossFn's implementation ===
+        # DPOLossFn._dpo_loss returns (preference_loss, accuracy, rewards_chosen_mean, rewards_rejected_mean)
+        seq_logratio = self._compute_logratio_sequences(
+            next_token_logits,
+            data,
+            vocab_parallel_rank=vocab_parallel_rank,
+            vocab_parallel_group=vocab_parallel_group,
+            context_parallel_group=context_parallel_group,
+        )
+        preference_loss, dpo_accuracy, rewards_chosen_mean, rewards_rejected_mean = self._preference_loss(
+            seq_logratio,
+            data["sample_mask"],
+            global_valid_seqs,
+            beta=self.reference_policy_kl_penalty,
+        )
+        quality_loss, q_chosen_mean, q_rejected_mean = self._quality_loss_bco(
+            seq_logratio, data["sample_mask"], global_valid_seqs, beta=self.reference_policy_kl_penalty
+        )
+
+        # update reward_shift (δ) as EMA of β * chosen_logratio? The paper uses moving average of previous rewards.
+        # We'll use EMA on the mean chosen logratio (not multiplied by beta to match formula delta is used as shift).
+        # Move to device and update
+        self._ensure_device_for_reward_shift(device)
+        # compute mean chosen logratio used to update delta: use q_chosen_mean (already masked_mean)
+        delta_update = q_chosen_mean.detach()  # scalar tensor
+        # EMA: new_delta = momentum * old_delta + (1 - momentum) * delta_update
+        self.reward_shift = self.reward_shift * self.reward_shift_momentum + (1.0 - self.reward_shift_momentum) * delta_update
+
+        # combine losses with weights (MPO formula)
+        total_loss = (
+            self.preference_loss_weight * preference_loss
+            + self.quality_loss_weight * quality_loss
+            + self.sft_loss_weight * sft_loss_chosen
+        )
+
+        # number of valid preference pairs
+        num_valid_samples = data["sample_mask"].sum() / 2.0
+
+        info = {
+            "loss": float(total_loss.item()),
+            "sft_loss": float(sft_loss_chosen.item()) if isinstance(sft_loss_chosen, torch.Tensor) else float(sft_loss_chosen),
+            "preference_loss": float(preference_loss.item()),
+            "bco_loss": float(quality_loss.item()),
+            "accuracy": float(dpo_accuracy.item()),
+            "dpo_rewards_chosen_mean": float(rewards_chosen_mean.item()),
+            "dpo_rewards_rejected_mean": float(rewards_rejected_mean.item()),
+            "bco_chosen_mean": float(q_chosen_mean.item()),
+            "bco_rejected_mean": float(q_rejected_mean.item()),
+            "num_valid_samples": float(num_valid_samples.item()),
+        }
+
+        return total_loss, info
