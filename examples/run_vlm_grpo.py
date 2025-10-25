@@ -333,7 +333,7 @@ def main() -> None:
 
     if not args.config:
         args.config = os.path.join(
-            os.path.dirname(__file__), "configs", "vlm_grpo_3B_vision_r1.yaml"
+            os.path.dirname(__file__), "configs", "vlm_grpo_3B.yaml"
         )
 
     config = load_config(args.config)

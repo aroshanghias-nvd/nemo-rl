@@ -39,6 +39,9 @@ def parse_args():
     parser.add_argument(
         "--hf-ckpt-path", type=str, default=None, help="Path to save HF checkpoint"
     )
+    parser.add_argument(
+        "--extras-path", type=str, default="/lustre/fs1/portfolios/llmservice/users/jseppanen/convert_dcp_to_hf_extras", help="Path to extras directory"
+    )
     # Parse known args for the script
     args = parser.parse_args()
 
@@ -71,9 +74,10 @@ def main():
     )
 
     # copy extra *.jinja/*.json/*.py files
-    base_path = "/lustre/fs1/portfolios/llmservice/users/jseppanen/convert_dcp_to_hf_extras"
-    for file in os.listdir(base_path):
-        shutil.copyfile(f"{base_path}/{file}", f"{args.hf_ckpt_path}/{file}")
+    for file in os.listdir(args.extras_path):
+        if "safetensors" in file:
+            continue
+        shutil.copyfile(f"{args.extras_path}/{file}", f"{args.hf_ckpt_path}/{file}")
 
     print(f"Saved HF checkpoint to: {hf_ckpt}")
 
