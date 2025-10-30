@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import gc
+import math
 import os
 import time
 import warnings
@@ -664,11 +665,12 @@ def grpo_train(
                         )
                     )
                     # Convert LLMMessageLogType to FlatMessagesType for generation
-                    batched_flat, input_lengths = batched_message_log_to_flat_message(
+                    batched_flat, _ = batched_message_log_to_flat_message(
                         repeated_batch["message_log"],
                         pad_value_dict={"token_ids": tokenizer.pad_token_id},
                     )
                     input_ids = batched_flat["token_ids"]
+                    del batched_flat
 
                 # Generate responses - this updates the LLMMessageLogType in repeated_batch
                 print(
@@ -768,6 +770,29 @@ def grpo_train(
                         if use_zero_variance_prompt_filtering:
                             loss_multiplier[zero_var_mask] = 0
                         repeated_batch["loss_multiplier"] = loss_multiplier
+
+                        # feature flag for sample filtering
+                        if use_zero_variance_prompt_filtering:
+                            sample_mask = loss_multiplier > 0
+                            if torch.all(~sample_mask).item():
+                                warnings.warn("All prompts were filtered out. Skipping training.")
+                                continue
+                            # reduce effective batch size and round up to a multiple of dp_size
+                            total_num_samples = len(sample_mask)
+                            train_gbs = policy.cfg["train_global_batch_size"]  # minibatch size
+                            dp_size = policy.sharding_annotations.get_axis_size("data_parallel")
+                            assert total_num_samples % train_gbs == 0, "total_num_samples must be divisible by train_gbs"
+                            keep_fraction = sample_mask.float().mean().item()
+                            effective_gbs = math.ceil(train_gbs * keep_fraction / dp_size) * dp_size
+                            effective_num_samples = total_num_samples // train_gbs * effective_gbs
+                            indices = torch.argsort((~sample_mask).int())
+                            assert (advantages[indices[effective_num_samples:]] == 0).all().item(), "logic error in zero-variance filtering"
+                            indices = indices[:effective_num_samples].sort().values
+
+                            repeated_batch = repeated_batch.select_indices(indices)
+                            advantages = advantages[indices]
+                            print(f"Effective batch size {effective_num_samples // master_config['grpo']['num_generations_per_prompt']} prompts, {effective_num_samples} rollouts")
+
                     # Add loss mask and advantages to each message in LLMMessageLogType
                     for i, message_log in enumerate(repeated_batch["message_log"]):
                         for j, message in enumerate(message_log):
@@ -835,7 +860,7 @@ def grpo_train(
                 print("▶ Training policy...", flush=True)
                 maybe_log_gpu_memory()
                 with timer.time("policy_training"):
-                    train_results = policy.train(train_data.as_shuffled(), loss_fn)
+                    train_results = policy.train(train_data.as_shuffled(), loss_fn, gbs=effective_gbs)
 
                 is_last_step = (total_steps + 1 >= max_num_steps) or (
                     (current_epoch + 1 == max_num_epochs)
