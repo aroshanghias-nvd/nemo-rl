@@ -1025,4 +1025,7 @@ class NemotronH_Nano_VL_V2(nn.Module, HasInnerState, IsHybrid, SupportsMultiModa
 
 
 def register():
-    ModelRegistry.register_model("NemotronH_Nano_VL_V2", NemotronH_Nano_VL_V2)
+    ModelRegistry.register_model(
+        "NemotronH_Nano_VL_V2",
+        "nemo_rl.models.generation.vllm.custom_vlm:NemotronH_Nano_VL_V2",
+    )

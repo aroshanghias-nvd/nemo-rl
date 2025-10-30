@@ -320,9 +320,11 @@ class BaseVllmGenerationWorker:
             # Configure vLLM for tensor/pipeline parallelism within Ray
             # Reset CUDA_VISIBLE_DEVICES to allow vLLM to manage GPU assignment
             os.environ.pop("CUDA_VISIBLE_DEVICES", None)
-            os.environ["VLLM_RAY_PER_WORKER_GPUS"] = str(
-                self.fraction_of_gpus / model_parallel_size
-            )
+            # FIXME(jseppanen): bug fix for OOM during TP=2
+            os.environ["VLLM_RAY_PER_WORKER_GPUS"] = str(self.fraction_of_gpus)
+            # os.environ["VLLM_RAY_PER_WORKER_GPUS"] = str(
+            #     self.fraction_of_gpus / model_parallel_size
+            # )
 
             # Set bundle indices for parallel workers
             bundle_indices_str = ",".join(map(str, bundle_indices))
@@ -330,6 +332,9 @@ class BaseVllmGenerationWorker:
             print(
                 f"VLLM_RAY_BUNDLE_INDICES environment variable set to: {os.environ.get('VLLM_RAY_BUNDLE_INDICES')}"
             )
+
+            # FIXME(jseppanen): prevent OOM during TP>1 model initialization in vLLM V0 engine. Not needed with V1
+            os.environ["CUDA_VISIBLE_DEVICES"] = bundle_indices_str
 
             # Use Ray for distributed execution in parallel mode
             vllm_kwargs["distributed_executor_backend"] = "ray"

@@ -29,6 +29,12 @@ except ImportError:
         "please run at least once with the environment variable NRL_FORCE_REBUILD_VENVS=true set to force the rebuild of the environment."
     )
 
+import nemo_rl.models.generation.vllm.custom_vlm
+import nemo_rl.models.nemotron_h_nano_vl
+
+nemo_rl.models.generation.vllm.custom_vlm.register()
+nemo_rl.models.nemotron_h_nano_vl.register()
+
 
 class VllmInternalWorkerExtension:
     def init_collective(
