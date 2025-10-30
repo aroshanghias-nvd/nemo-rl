@@ -846,6 +846,11 @@ class DTensorPolicyWorker:
 
                 grad_norm: Optional[float | torch.Tensor] = None
                 if not eval_mode:
+                    # strategic fix for sporadic OOM during grad norm
+                    del loss
+                    gc.collect()
+                    torch.cuda.empty_cache()
+
                     with torch.no_grad():
                         grad_norm = get_grad_norm(
                             self.model.parameters(),
