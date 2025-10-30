@@ -67,6 +67,7 @@ from nemo_rl.utils.logger import (
 from nemo_rl.utils.nsys import maybe_gpu_profile_step
 from nemo_rl.utils.timer import TimeoutChecker, Timer
 from nemo_rl.utils.venvs import create_local_venv_on_each_node
+from nemo_rl.utils.gpu_memory_logging import maybe_log_gpu_memory
 
 # ===============================================================================
 # Configuration
@@ -624,6 +625,7 @@ def grpo_train(
             POLICY_GENERATION_STALE = False
         else:
             policy_generation.prepare_for_generation()
+        maybe_log_gpu_memory()
         val_metrics, validation_timings = validate(
             policy_generation,
             val_dataloader,
@@ -684,6 +686,7 @@ def grpo_train(
                             policy.offload_after_refit()  # unload optimizer to make space for generation
                         policy_generation.prepare_for_generation()
 
+                maybe_log_gpu_memory()
                 with timer.time("generation"):
                     # Use async rollouts if vLLM async engine is enabled
                     if _should_use_async_rollouts(master_config):
@@ -815,6 +818,7 @@ def grpo_train(
                     policy.prepare_for_lp_inference()
 
                 print("▶ Computing logprobs...", flush=True)
+                maybe_log_gpu_memory()
                 with timer.time("policy_and_reference_logprobs"):
                     fprop_logprobs = policy.get_logprobs(train_data)["logprobs"]
                     reference_logprobs = policy.get_reference_policy_logprobs(
@@ -829,6 +833,7 @@ def grpo_train(
                     POLICY_GENERATION_STALE = True
 
                 print("▶ Training policy...", flush=True)
+                maybe_log_gpu_memory()
                 with timer.time("policy_training"):
                     train_results = policy.train(train_data.as_shuffled(), loss_fn)
 
@@ -848,6 +853,7 @@ def grpo_train(
                         if colocated_inference:
                             policy.offload_after_refit()  # unload optimizer to make space for generation
                         policy_generation.prepare_for_generation()
+                    maybe_log_gpu_memory()
                     val_metrics, validation_timings = validate(
                         policy_generation,
                         val_dataloader,
