@@ -345,6 +345,10 @@ class BaseVllmGenerationWorker:
         os.environ["VLLM_USE_V1"] = "1" if is_vllm_v1_engine_enabled() else "0"
         os.environ["VLLM_ALLOW_INSECURE_SERIALIZATION"] = "1"
 
+        print(f"[driver] TP={self.tensor_parallel_size} PP={self.pipeline_parallel_size}", flush=True)
+        print(f"[driver] CUDA_VISIBLE_DEVICES={os.environ.get('CUDA_VISIBLE_DEVICES')}", flush=True)
+        print(f"[driver] VLLM_RAY_PER_WORKER_GPUS={os.environ.get('VLLM_RAY_PER_WORKER_GPUS')} VLLM_RAY_BUNDLE_INDICES={os.environ.get('VLLM_RAY_BUNDLE_INDICES')}", flush=True)
+
         # We should use vLLM DP if ep_size > tp_size since EP_SIZE = DP_SIZE * TP_SIZE in vLLM.
         # See details in https://github.com/vllm-project/vllm/blob/main/examples/offline_inference/data_parallel.py
         if self.expert_parallel_size > self.tensor_parallel_size:
@@ -490,6 +494,10 @@ class VllmGenerationWorker(BaseVllmGenerationWorker):
 
     def post_init(self):
         self.vllm_device_ids = self.report_device_id()
+        print(f"[driver] vllm_device_ids={self.vllm_device_ids}", flush=True)
+        info = self.llm.collective_rpc('report_mapping', args=tuple())
+        for i, x in enumerate(info):
+            print(f"[worker {i}] {x}", flush=True)
 
     def init_collective(
         self, rank_prefix: int, ip: str, port: int, world_size: int
