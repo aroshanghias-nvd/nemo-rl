@@ -172,14 +172,14 @@ def format_educhat_math():
     path = f"{root}/internvl_data/image_data/educhat_math/cmm_math_cot_zh.jsonl"
     old_prompt = "当你准备好给出答案时，请使用以下格式：\"答案: ...\""
     inner_pattern = r"([^\n]+?)"
-    result_pattern = rf"{inner_pattern}|\\\({inner_pattern}\\\)|\${inner_pattern}\$"
+    result_pattern = rf"(?:\\\({inner_pattern}\\\)|\\\[\n{inner_pattern}\n\\\]|\${inner_pattern}\$|{inner_pattern})"
     answer_patterns = [
         rf"答案[:：]?\s*{result_pattern}[.。]?$",
         rf"答案为[:：]?\s*{result_pattern}[.。]?$",
         rf"答案是[:：]?\s*{result_pattern}[.。]?$",
         rf"故答案为[:：]?\s*{result_pattern}[.。]?$",
         rf"\n\*\*答案[:：]?\s*{result_pattern}\*\*[.。]?$",
-        rf"\n\*\*答案\*\*[:：]?\s*{result_pattern}[.。]?$",
+        rf"\n\*\*答案[:：]?\*\*[:：]?\s*{result_pattern}[.。]?$",
         rf"\n\*\*答案:\*\*\s*{result_pattern}[.。]?$",
         rf"\n##* 答案[:：]?\s*{result_pattern}[.。]?$",
     ]
@@ -195,6 +195,11 @@ def format_educhat_math():
             if not answer:
                 continue
             answer = answer.strip()
+            if "\\boxed{" in answer:
+                answer = re.sub(r"\\boxed\{(.*)\}[^}]*", r"\1", answer)
+            # print(output_text)
+            # print("--------------------------------")
+            # print(answer_pattern, "=>", answer)
             break
         if not answer:
             print(f"[{idx}] skipping malformed answer: {output_text[-70:].strip()}", file=sys.stderr)
