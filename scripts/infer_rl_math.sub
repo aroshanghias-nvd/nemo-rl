@@ -1,0 +1,27 @@
+#!/bin/bash
+#SBATCH --nodes=8
+#SBATCH --gres=gpu:8
+#SBATCH --exclusive
+#SBATCH --partition=batch_block1
+#SBATCH --account=llmservice_fm_vision
+#SBATCH --time=2:00:00
+#SBATCH --dependency=singleton
+
+# avt 2 samples/sec on one node, so need 8 nodes times 2 hours for 100k samples
+
+set -euo pipefail
+
+WORKDIR=/lustre/fsw/portfolios/llmservice/users/jseppanen/dev/nemo-rl-n5p5-mmpr-tiny
+INPUT_JSONL=$WORKDIR/rl_math.jsonl
+OUTPUT_PREFIX=$WORKDIR/rl_math_output
+
+export HF_HOME=/lustre/fsw/portfolios/llmservice/users/jseppanen/.cache/huggingface
+
+srun \
+  --ntasks-per-node=1 \
+  --nodes=$SLURM_JOB_NUM_NODES \
+  --container-image=/lustre/fsw/portfolios/llmservice/users/jseppanen/sqsh/vllm-3225729-cuda-12.8.1.sqsh \
+  --container-mounts=/lustre:/lustre \
+  --container-workdir=$WORKDIR \
+  --label \
+  bash -lc "source /workspace/.venv/bin/activate && python scripts/infer_rl_math.py '$INPUT_JSONL' \"${OUTPUT_PREFIX}_\${SLURM_NODEID}.jsonl\""

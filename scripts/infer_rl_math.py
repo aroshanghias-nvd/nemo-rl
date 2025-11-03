@@ -69,17 +69,18 @@ def detect_mime_type(path):
 
 def image_to_data_url(path):
     """Return a base64 data URL for an image file path."""
+    assert isinstance(path, str), f"path must be a string, got {type(path)}"
     mime = detect_mime_type(path)
     with open(path, "rb") as f:
         b64 = base64.b64encode(f.read()).decode("utf-8")
     return f"data:{mime};base64,{b64}"
 
 
-def read_samples(jsonl_path):
+def read_samples(jsonl_path, shard_id=0, num_shards=1):
     """Yield (image, question, answer) from a JSONL file."""
     with open(jsonl_path, "r") as f:
-        for line in f:
-            if not line.strip():
+        for idx, line in enumerate(f):
+            if (idx % num_shards) != shard_id:
                 continue
             row = json.loads(line)
             image = row.get("image")
@@ -139,7 +140,8 @@ def launch_vllm_server(port, gpu_id):
     ]
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
-    log = open(f"vllm_{port}.log", "w")
+    shard_id = int(os.getenv("SLURM_NODEID") or "0")
+    log = open(f"vllm_{shard_id}_{gpu_id}.log", "w")
     proc = subprocess.Popen(cmd, env=env, stdout=log, stderr=subprocess.STDOUT)
     return proc, log
 
@@ -195,8 +197,10 @@ def vllm_worker(port, request_q, response_q):
 
 
 def sample_reader(input_path, request_q, n_workers, counters, done_event):
-    """Read samples and enqueue requests, then send sentinels."""
-    for item in read_samples(input_path):
+    """Read shard's samples and enqueue requests, then send sentinels."""
+    shard_id = int(os.getenv("SLURM_NODEID") or "0")
+    num_shards = int(os.getenv("SLURM_NNODES") or "1")
+    for item in read_samples(input_path, shard_id, num_shards):
         request_q.put(item)
         counters["enqueued"] += 1
     for _ in range(n_workers):
@@ -204,10 +208,10 @@ def sample_reader(input_path, request_q, n_workers, counters, done_event):
     done_event.set()
 
 
-def count_samples(jsonl_path):
+def count_samples(jsonl_path, shard_id=0, num_shards=1):
     """Return number of non-empty lines in a JSONL file."""
     with open(jsonl_path, "r") as f:
-        return sum(1 for line in f if line.strip())
+        return sum(1 for idx, line in enumerate(f) if (idx % num_shards) == shard_id)
 
 
 @click.command()
@@ -233,7 +237,11 @@ def main(input_path, output_path):
 
         counters = {"enqueued": 0}
         done_event = threading.Event()
-        total_samples = count_samples(input_path)
+        shard_id = int(os.getenv("SLURM_NODEID") or "0")
+        num_shards = int(os.getenv("SLURM_NNODES") or "1")
+        if not (0 <= shard_id < num_shards):
+            raise ValueError(f"Invalid shard: {shard_id}/{num_shards}")
+        total_samples = count_samples(input_path, shard_id, num_shards)
         reader = threading.Thread(
             target=sample_reader,
             args=(input_path, request_q, len(PORTS), counters, done_event),
