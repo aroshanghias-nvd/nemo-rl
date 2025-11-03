@@ -1,13 +1,12 @@
 #!/bin/bash
-#SBATCH --nodes=8
-#SBATCH --gres=gpu:8
-#SBATCH --exclusive
+#SBATCH --array=0-149%64
+#SBATCH --nodes=1
+#SBATCH --gres=gpu:1
 #SBATCH --partition=batch_block1
 #SBATCH --account=llmservice_fm_vision
-#SBATCH --time=2:00:00
-#SBATCH --dependency=singleton
+#SBATCH --time=4:00:00
 
-# avt 2 samples/sec on one node, so need 8 nodes times 2 hours for 100k samples
+# 150 jobs x 4 hours x ~220 samples/hour/gpu = ~130k samples
 
 set -euo pipefail
 
@@ -24,4 +23,4 @@ srun \
   --container-mounts=/lustre:/lustre \
   --container-workdir=$WORKDIR \
   --label \
-  bash -lc "source /workspace/.venv/bin/activate && python scripts/infer_rl_math.py '$INPUT_JSONL' \"${OUTPUT_PREFIX}_\${SLURM_NODEID}.jsonl\""
+  bash -lc "source /workspace/.venv/bin/activate && python scripts/infer_rl_math.py '$INPUT_JSONL' \"${OUTPUT_PREFIX}_\${SLURM_ARRAY_TASK_ID}.jsonl\""

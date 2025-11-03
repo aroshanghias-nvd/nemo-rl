@@ -26,10 +26,8 @@ import json
 import base64
 import logging
 import os
-import queue
 import socket
 import subprocess
-import threading
 import time
 from pathlib import Path
 
@@ -44,8 +42,6 @@ TEMPERATURE = 0.6
 TOP_K = 50
 TOP_P = 0.95
 NUM_TILES = 12
-PORTS = list(range(8000, 8008))
-GPU_IDS = list(range(8))
 
 # nano-v2 won't really follow formats that deviate from the SFT data
 # PROMPT = "Answer the question and output ONLY the final answer followed by a newline."
@@ -112,8 +108,8 @@ def build_messages(question, image_data_url=None, reasoning=False):
     return messages
 
 
-def launch_vllm_server(port, gpu_id):
-    """Start one vLLM server on a port pinned to one GPU."""
+def launch_vllm_server(port):
+    """Start one vLLM server on a port."""
     cmd = [
         "vllm",
         "serve",
@@ -139,9 +135,8 @@ def launch_vllm_server(port, gpu_id):
         str(port),
     ]
     env = os.environ.copy()
-    env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
-    shard_id = int(os.getenv("SLURM_NODEID") or "0")
-    log = open(f"vllm_{shard_id}_{gpu_id}.log", "w")
+    task_id = int(os.getenv("SLURM_ARRAY_TASK_ID") or "0")
+    log = open(f"vllm_{task_id}.log", "w")
     proc = subprocess.Popen(cmd, env=env, stdout=log, stderr=subprocess.STDOUT)
     return proc, log
 
@@ -158,54 +153,43 @@ def wait_for_port(host, port, timeout):
     raise TimeoutError(f"Port {port} not ready")
 
 
-def vllm_worker(port, request_q, response_q):
-    """Consume items, call chat completions on one vLLM server, produce rows."""
-    client = openai.OpenAI(api_key="dummy", base_url=f"http://localhost:{port}/v1")
-    while True:
-        item = request_q.get()
-        if item is None:
-            return
-        image, question, answer, metadata = item
-        try:
-            image_data_url = image_to_data_url(image) if image else None
-            question = question + "\n" + PROMPT
-            messages = build_messages(question, image_data_url=image_data_url, reasoning=True)
-            resp = client.chat.completions.create(
-                model=MODEL,
-                messages=messages,
-                temperature=TEMPERATURE,
-                stream=False,
-                extra_body={
-                    "top_k": TOP_K,
-                    "top_p": TOP_P,
-                    "mm_processor_kwargs": {"max_num_tiles": NUM_TILES},
-                },
-            )
-            pred = resp.choices[0].message.content.strip() if resp and resp.choices else ""
-            if "</think>" in pred and "<think>" not in pred:
-                pred = "<think>\n" + pred
-        except Exception:
-            logging.exception("Error in vLLM worker")
-            pred = None
-        response_q.put({
-            "image": image,
-            "question": question,
-            "answer": answer,
-            "prediction": pred,
-            **metadata,
-        })
-
-
-def sample_reader(input_path, request_q, n_workers, counters, done_event):
-    """Read shard's samples and enqueue requests, then send sentinels."""
-    shard_id = int(os.getenv("SLURM_NODEID") or "0")
-    num_shards = int(os.getenv("SLURM_NNODES") or "1")
-    for item in read_samples(input_path, shard_id, num_shards):
-        request_q.put(item)
-        counters["enqueued"] += 1
-    for _ in range(n_workers):
-        request_q.put(None)
-    done_event.set()
+def run_inference_over_shard(client, input_path, output_path, shard_id, num_shards):
+    """Run inference sequentially over one shard and write JSONL outputs."""
+    total_samples = count_samples(input_path, shard_id, num_shards)
+    progress = tqdm(total=total_samples)
+    with open(output_path, "w", buffering=1, encoding="utf-8") as f:
+        for image, question, answer, metadata in read_samples(input_path, shard_id, num_shards):
+            try:
+                image_data_url = image_to_data_url(image) if image else None
+                q = question + "\n" + PROMPT
+                messages = build_messages(q, image_data_url=image_data_url, reasoning=True)
+                resp = client.chat.completions.create(
+                    model=MODEL,
+                    messages=messages,
+                    temperature=TEMPERATURE,
+                    stream=False,
+                    extra_body={
+                        "top_k": TOP_K,
+                        "top_p": TOP_P,
+                        "mm_processor_kwargs": {"max_num_tiles": NUM_TILES},
+                    },
+                )
+                pred = resp.choices[0].message.content.strip() if resp and resp.choices else ""
+                if "</think>" in pred and "<think>" not in pred:
+                    pred = "<think>\n" + pred
+            except Exception:
+                logging.exception("Error in inference loop")
+                pred = None
+            row = {
+                "image": image,
+                "question": q,
+                "answer": answer,
+                "prediction": pred,
+                **metadata,
+            }
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+            progress.update(1)
+    progress.close()
 
 
 def count_samples(jsonl_path, shard_id=0, num_shards=1):
@@ -218,53 +202,19 @@ def count_samples(jsonl_path, shard_id=0, num_shards=1):
 @click.argument("input_path", type=click.Path(exists=True))
 @click.argument("output_path", type=click.Path())
 def main(input_path, output_path):
-    procs = []
+    task_id = int(os.getenv("SLURM_ARRAY_TASK_ID", "0"))
+    num_tasks = int(os.getenv("SLURM_ARRAY_TASK_COUNT", "1"))
+    port = 19000 + task_id
+
+    proc = None
+    log = None
     try:
-        for port, gpu in zip(PORTS, GPU_IDS):
-            proc, log = launch_vllm_server(port, gpu)
-            procs.append((proc, log))
-        for port in PORTS:
-            wait_for_port("localhost", port, timeout=600)
-
-        request_q = queue.Queue(maxsize=100)
-        response_q = queue.Queue(maxsize=100)
-
-        threads = []
-        for port in PORTS:
-            t = threading.Thread(target=vllm_worker, args=(port, request_q, response_q), daemon=True)
-            t.start()
-            threads.append(t)
-
-        counters = {"enqueued": 0}
-        done_event = threading.Event()
-        shard_id = int(os.getenv("SLURM_NODEID") or "0")
-        num_shards = int(os.getenv("SLURM_NNODES") or "1")
-        if not (0 <= shard_id < num_shards):
-            raise ValueError(f"Invalid shard: {shard_id}/{num_shards}")
-        total_samples = count_samples(input_path, shard_id, num_shards)
-        reader = threading.Thread(
-            target=sample_reader,
-            args=(input_path, request_q, len(PORTS), counters, done_event),
-            daemon=True,
-        )
-        reader.start()
-
-        received = 0
-        progress = tqdm(total=total_samples)
-        with open(output_path, "w", buffering=1, encoding="utf-8") as f:
-            while True:
-                row = response_q.get()
-                f.write(json.dumps(row, ensure_ascii=False) + "\n")
-                received += 1
-                progress.update(1)
-                if done_event.is_set() and received >= counters["enqueued"]:
-                    break
-        progress.close()
-        for t in threads:
-            t.join(timeout=1)
-        reader.join(timeout=1)
+        proc, log = launch_vllm_server(port)
+        wait_for_port("localhost", port, timeout=600)
+        client = openai.OpenAI(api_key="dummy", base_url=f"http://localhost:{port}/v1")
+        run_inference_over_shard(client, input_path, output_path, task_id, num_tasks)
     finally:
-        for proc, log in procs:
+        if proc is not None:
             try:
                 proc.terminate()
                 proc.wait(timeout=10)
@@ -273,6 +223,7 @@ def main(input_path, output_path):
                     proc.kill()
                 except Exception:
                     pass
+        if log is not None:
             try:
                 log.close()
             except Exception:
