@@ -111,7 +111,7 @@ def format_metamathqa():
     # path = f"{root}/sft_jsonl/internvl_cot/metamathqa_en_nmh5r_clean.jsonl"
     path = f"{root}/sft_jsonl/internvl_cot/metamathqa_en.jsonl"
     inner_pattern = r"([^\n]+?)"
-    result_pattern = rf"{inner_pattern}|\\\({inner_pattern}\\\)|\${inner_pattern}\$"
+    result_pattern = rf"(?:\\\({inner_pattern}\\\)|\${inner_pattern}\$|{inner_pattern})"
     answer_patterns = [
         rf"he answer is:? {result_pattern}\.?$",
         rf"he final answer is:? {result_pattern}\.?$",
@@ -135,6 +135,7 @@ def format_metamathqa():
     ]
     for idx, sample, image, input_text, output_text in read_jsonl(path):
         assert input_text.endswith("Solve the math problem in the image.")
+        output_text = re.sub(r"<think>.*</think>", "", output_text)
         question = "Solve the math problem in the image.\n" + prompt
         answer = None
         for answer_pattern in answer_patterns:
@@ -145,6 +146,11 @@ def format_metamathqa():
             if not answer:
                 continue
             answer = answer.strip()
+            if " (or " in answer:
+                answer = re.sub(r" (?:\\text{ *)?\(or [^\n]+\)", "", answer)
+            # print(output_text)
+            # print("--------------------------------")
+            # print(answer_pattern, "=>", answer)
             break
         if not answer:
             print(f"[{idx}] skipping malformed answer: {output_text[-70:].strip()}", file=sys.stderr)
