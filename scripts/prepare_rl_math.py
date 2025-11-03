@@ -275,6 +275,8 @@ def main():
     limited = []
     for dataset in datasets:
         subset = [row for row in rows if row["dataset"] == dataset]
+        # filter out samples with multiple images
+        subset = [row for row in subset if not isinstance(row.get("image"), list)]
         limited.extend(subset[:40000])
     random.seed(0)
     random.shuffle(limited)
