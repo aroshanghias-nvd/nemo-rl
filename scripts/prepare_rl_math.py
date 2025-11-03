@@ -12,7 +12,10 @@ def read_jsonl(path):
         for idx, line in enumerate(f):
             sample = json.loads(line)
             if len(sample["conversations"]) > 2:
-                print(f"[{idx}] malformed sample: {json.dumps(sample, indent=2)}", file=sys.stderr)
+                print(
+                    f"[{idx}] malformed sample: {json.dumps(sample, indent=2)}",
+                    file=sys.stderr,
+                )
                 continue
             assert sample["conversations"][0]["from"] == "human"
             assert sample["conversations"][1]["from"] == "gpt"
@@ -55,7 +58,9 @@ def format_mulberry():
         subset = subset.group(1)
         if subset not in subsets:
             continue
-        assert input_text.endswith(old_prompt), f"[mulberry:{idx}] malformed question: {sample}"
+        assert input_text.endswith(old_prompt), (
+            f"[mulberry:{idx}] malformed question: {sample}"
+        )
         question = input_text.replace(old_prompt, "")
         answer = None
         for answer_pattern in answer_patterns:
@@ -65,6 +70,7 @@ def format_mulberry():
                 break
         assert answer, f"[mulberry:{idx}] malformed answer: {sample}"
         row = {
+            "dataset": f"mulberry_{subset}",
             "image": f"{image_root}/{image}",
             "conversations": [
                 {"from": "human", "value": question},
@@ -101,9 +107,13 @@ def format_geomverse():
             answer = answer.strip()
             break
         if not answer:
-            print(f"[geomverse:{idx}] skipping malformed answer: {output_text[-70:].strip()}", file=sys.stderr)
+            print(
+                f"[geomverse:{idx}] skipping malformed answer: {output_text[-70:].strip()}",
+                file=sys.stderr,
+            )
             continue
         row = {
+            "dataset": "geomverse",
             "image": f"{image_root}/{image}",
             "conversations": [
                 {"from": "human", "value": question},
@@ -162,9 +172,13 @@ def format_metamathqa():
             # print(answer_pattern, "=>", answer)
             break
         if not answer:
-            print(f"[metamathqa:{idx}] skipping malformed answer: {output_text[-70:].strip()}", file=sys.stderr)
+            print(
+                f"[metamathqa:{idx}] skipping malformed answer: {output_text[-70:].strip()}",
+                file=sys.stderr,
+            )
             continue
         row = {
+            "dataset": "metamathqa",
             "image": f"{image_root}/{image}",
             "conversations": [
                 {"from": "human", "value": question},
@@ -181,7 +195,7 @@ def format_educhat_math():
     # path = f"{root}/internvl_data/image_data/educhat_math/cmm_math_cot_zh_nmh5r.jsonl"
     path = f"{root}/internvl_data/image_data/educhat_math/cmm_math_cot_zh.jsonl"
     image_root = f"{root}/internvl_data/image_data/educhat_math"
-    old_prompt = "当你准备好给出答案时，请使用以下格式：\"答案: ...\""
+    old_prompt = '当你准备好给出答案时，请使用以下格式："答案: ..."'
     inner_pattern = r"([^\n]+?)"
     result_pattern = rf"(?:\\\({inner_pattern}\\\)|\\\[\n{inner_pattern}\n\\\]|\${inner_pattern}\$|{inner_pattern})"
     answer_patterns = [
@@ -213,9 +227,14 @@ def format_educhat_math():
             # print(answer_pattern, "=>", answer)
             break
         if not answer:
-            print(f"[educhat_math:{idx}] skipping malformed answer: {output_text[-70:].strip()}", file=sys.stderr)
+            print(
+                f"[educhat_math:{idx}] skipping malformed answer: {output_text[-70:].strip()}",
+                file=sys.stderr,
+            )
             continue
-        row = {}
+        row = {
+            "dataset": "educhat_math",
+        }
         if image:
             if isinstance(image, list):
                 row["image"] = [f"{image_root}/{i}" for i in image]
@@ -241,7 +260,25 @@ def main():
     rows.extend(format_educhat_math())
     random.seed(0)
     random.shuffle(rows)
-    for row in rows:
+    # filter max 40k per dataset
+    datasets = [
+        "educhat_math",         #  13060
+        "geomverse",            #   9259
+        "metamathqa",           # 224517
+        "mulberry_CLEVR-Math",  #   2272
+        "mulberry_geo3k",       #   1096
+        "mulberry_geoqa_plus",  #  38990
+        "mulberry_GEOS",        #     38
+        "mulberry_mathvision",  #    831
+        "mulberry_UniGeo",      #    870
+    ]
+    limited = []
+    for dataset in datasets:
+        subset = [row for row in rows if row["dataset"] == dataset]
+        limited.extend(subset[:40000])
+    random.seed(0)
+    random.shuffle(limited)
+    for row in limited:
         print(json.dumps(row, ensure_ascii=False))
 
 
