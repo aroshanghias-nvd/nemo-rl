@@ -1,15 +1,10 @@
 import json
-import sys
-import re
+import os
 import random
+import re
+import sys
 
 root = "/lustre/fs1/portfolios/llmservice/projects/llmservice_nlp_fm/datasets/eagle-next/image_data"
-
-
-prompt = "Answer the question and output ONLY the final answer followed by a newline."
-# "Answer the question after looking at the image. You should output only a single uppercase character (A, B, C, D, ...)."
-# "Reason and answer the question. Give your final answer between the <answer> and </answer> tags."
-# "Solve the following question step-by-step. Output ONLY the FINAL ANSWER in this format:\n\n\\boxed{your_final_answer_here}"
 
 
 def read_jsonl(path):
@@ -25,11 +20,13 @@ def read_jsonl(path):
             input_text = sample["conversations"][0]["value"]
             output_text = sample["conversations"][1]["value"]
             input_text = input_text.replace("<image>", "").strip()
+            output_text = re.sub(r"<think>.*</think>", "", output_text)
             yield idx, sample, image, input_text, output_text
 
 
 def format_mulberry():
     path = f"{root}/sft_jsonl/mulberry_sft/vision_r1_mulberry_sft_full_nmh5r_legal_cleanedup_v2.jsonl"
+    image_root = f"{root}/sft_jsonl/mulberry_sft"
     subsets = [
         "CLEVR-Math",
         "geo3k",
@@ -53,22 +50,22 @@ def format_mulberry():
     for idx, sample, image, input_text, output_text in read_jsonl(path):
         subset = re.search(r"mulberry_images/([^/]+)", image)
         if not subset:
-            print(f"[{idx}] malformed image path: {image}", file=sys.stderr)
+            print(f"[mulberry:{idx}] malformed image path: {image}", file=sys.stderr)
             continue
         subset = subset.group(1)
         if subset not in subsets:
             continue
-        assert input_text.endswith(old_prompt), f"[{idx}] malformed question: {sample}"
-        question = input_text.replace(old_prompt, prompt)
+        assert input_text.endswith(old_prompt), f"[mulberry:{idx}] malformed question: {sample}"
+        question = input_text.replace(old_prompt, "")
         answer = None
         for answer_pattern in answer_patterns:
             answer = re.search(answer_pattern, output_text, flags=re.DOTALL)
             if answer:
                 answer = answer.group(1).strip()
                 break
-        assert answer, f"[{idx}] malformed answer: {sample}"
+        assert answer, f"[mulberry:{idx}] malformed answer: {sample}"
         row = {
-            "image": image,
+            "image": f"{image_root}/{image}",
             "conversations": [
                 {"from": "human", "value": question},
                 {"from": "gpt", "value": answer},
@@ -76,27 +73,38 @@ def format_mulberry():
         }
         row["source_path"] = path
         row["source_index"] = idx
+        assert os.path.exists(row["image"]), f"image not found: {row['image']}"
         yield row
 
 
 def format_geomverse():
-    # path = f"{root}/sft_jsonl/internvl_cot/geomverse_en_aug_nmh5r.jsonl"  # geomverse_cot
-    path = f"{root}/sft_jsonl/format4/cauldron_geomverse_base.jsonl"
+    path = f"{root}/sft_jsonl/internvl_cot/geomverse_en_aug_nmh5r.jsonl"
+    # path = f"{root}/sft_jsonl/format4/cauldron_geomverse_base.jsonl"
+    image_root = f"{root}/internvl_data/image_data/geomverse"
+    inner_pattern = r"([^\n]+?)"
+    result_pattern = rf"(?:\\\({inner_pattern}\\\)|\${inner_pattern}\$|{inner_pattern})"
     answer_patterns = [
-        r"The answer is ([^\n]+)\.$",
-        r"Therefore the final answer is ([^\n]+)\.$",
+        rf"[Tt]he answer is {result_pattern}\.?$",
+        rf"[Tt]he final answer is {result_pattern}\.?$",
+        rf"[Tt]he result is {result_pattern}\.?$",
     ]
     for idx, sample, image, input_text, output_text in read_jsonl(path):
-        question = input_text + "\n" + prompt
+        question = input_text
         answer = None
         for answer_pattern in answer_patterns:
             answer = re.search(answer_pattern, output_text, flags=re.DOTALL)
-            if answer:
-                answer = answer.group(1).strip()
-                break
-        assert answer, f"[{idx}] malformed answer: {sample}"
+            if not answer:
+                continue
+            answer = next(g for g in answer.groups() if g is not None)
+            if not answer:
+                continue
+            answer = answer.strip()
+            break
+        if not answer:
+            print(f"[geomverse:{idx}] skipping malformed answer: {output_text[-70:].strip()}", file=sys.stderr)
+            continue
         row = {
-            "image": image,
+            "image": f"{image_root}/{image}",
             "conversations": [
                 {"from": "human", "value": question},
                 {"from": "gpt", "value": answer},
@@ -104,12 +112,14 @@ def format_geomverse():
         }
         row["source_path"] = path
         row["source_index"] = idx
+        assert os.path.exists(row["image"]), f"image not found: {row['image']}"
         yield row
 
 
 def format_metamathqa():
     # path = f"{root}/sft_jsonl/internvl_cot/metamathqa_en_nmh5r_clean.jsonl"
     path = f"{root}/sft_jsonl/internvl_cot/metamathqa_en.jsonl"
+    image_root = f"{root}/internvl_data/image_data/metamathqa"
     inner_pattern = r"([^\n]+?)"
     result_pattern = rf"(?:\\\({inner_pattern}\\\)|\${inner_pattern}\$|{inner_pattern})"
     answer_patterns = [
@@ -135,8 +145,7 @@ def format_metamathqa():
     ]
     for idx, sample, image, input_text, output_text in read_jsonl(path):
         assert input_text.endswith("Solve the math problem in the image.")
-        output_text = re.sub(r"<think>.*</think>", "", output_text)
-        question = "Solve the math problem in the image.\n" + prompt
+        question = "Solve the math problem in the image."
         answer = None
         for answer_pattern in answer_patterns:
             answer = re.search(answer_pattern, output_text, flags=re.DOTALL)
@@ -153,10 +162,10 @@ def format_metamathqa():
             # print(answer_pattern, "=>", answer)
             break
         if not answer:
-            print(f"[{idx}] skipping malformed answer: {output_text[-70:].strip()}", file=sys.stderr)
+            print(f"[metamathqa:{idx}] skipping malformed answer: {output_text[-70:].strip()}", file=sys.stderr)
             continue
         row = {
-            "image": image,
+            "image": f"{image_root}/{image}",
             "conversations": [
                 {"from": "human", "value": question},
                 {"from": "gpt", "value": answer},
@@ -164,12 +173,14 @@ def format_metamathqa():
         }
         row["source_path"] = path
         row["source_index"] = idx
+        assert os.path.exists(row["image"]), f"image not found: {row['image']}"
         yield row
 
 
 def format_educhat_math():
     # path = f"{root}/internvl_data/image_data/educhat_math/cmm_math_cot_zh_nmh5r.jsonl"
     path = f"{root}/internvl_data/image_data/educhat_math/cmm_math_cot_zh.jsonl"
+    image_root = f"{root}/internvl_data/image_data/educhat_math"
     old_prompt = "当你准备好给出答案时，请使用以下格式：\"答案: ...\""
     inner_pattern = r"([^\n]+?)"
     result_pattern = rf"(?:\\\({inner_pattern}\\\)|\\\[\n{inner_pattern}\n\\\]|\${inner_pattern}\$|{inner_pattern})"
@@ -185,7 +196,7 @@ def format_educhat_math():
     ]
     for idx, sample, image, input_text, output_text in read_jsonl(path):
         assert old_prompt in input_text
-        question = input_text.replace(old_prompt, "") + "\n" + prompt
+        question = input_text.replace(old_prompt, "")
         answer = None
         for answer_pattern in answer_patterns:
             answer = re.search(answer_pattern, output_text, flags=re.DOTALL)
@@ -202,9 +213,17 @@ def format_educhat_math():
             # print(answer_pattern, "=>", answer)
             break
         if not answer:
-            print(f"[{idx}] skipping malformed answer: {output_text[-70:].strip()}", file=sys.stderr)
+            print(f"[educhat_math:{idx}] skipping malformed answer: {output_text[-70:].strip()}", file=sys.stderr)
             continue
-        row = {"image": image} if image else {}
+        row = {}
+        if image:
+            if isinstance(image, list):
+                row["image"] = [f"{image_root}/{i}" for i in image]
+                for img in row["image"]:
+                    assert os.path.exists(img), f"image not found: {img}"
+            else:
+                row["image"] = f"{image_root}/{image}"
+                assert os.path.exists(row["image"]), f"image not found: {row['image']}"
         row["conversations"] = [
             {"from": "human", "value": question},
             {"from": "gpt", "value": answer},
@@ -212,6 +231,7 @@ def format_educhat_math():
         row["source_path"] = path
         row["source_index"] = idx
         yield row
+
 
 def main():
     rows = []
@@ -223,6 +243,7 @@ def main():
     random.shuffle(rows)
     for row in rows:
         print(json.dumps(row, ensure_ascii=False))
+
 
 if __name__ == "__main__":
     main()
