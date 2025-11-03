@@ -35,6 +35,7 @@ from pathlib import Path
 
 import click
 import openai
+from tqdm import tqdm
 
 # CONFIG
 MODEL = "nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-FP8"
@@ -131,6 +132,8 @@ def launch_vllm_server(port, gpu_id):
         str(0.9),
         "--max-model-len",
         str(MAX_TOKENS),
+        # "--mm-processor-kwargs",
+        # '{"use_fast": true}',
         "--port",
         str(port),
     ]
@@ -201,6 +204,12 @@ def sample_reader(input_path, request_q, n_workers, counters, done_event):
     done_event.set()
 
 
+def count_samples(jsonl_path):
+    """Return number of non-empty lines in a JSONL file."""
+    with open(jsonl_path, "r") as f:
+        return sum(1 for line in f if line.strip())
+
+
 @click.command()
 @click.argument("input_path", type=click.Path(exists=True))
 @click.argument("output_path", type=click.Path())
@@ -224,6 +233,7 @@ def main(input_path, output_path):
 
         counters = {"enqueued": 0}
         done_event = threading.Event()
+        total_samples = count_samples(input_path)
         reader = threading.Thread(
             target=sample_reader,
             args=(input_path, request_q, len(PORTS), counters, done_event),
@@ -232,14 +242,16 @@ def main(input_path, output_path):
         reader.start()
 
         received = 0
+        progress = tqdm(total=total_samples)
         with open(output_path, "w", buffering=1, encoding="utf-8") as f:
             while True:
                 row = response_q.get()
                 f.write(json.dumps(row, ensure_ascii=False) + "\n")
                 received += 1
+                progress.update(1)
                 if done_event.is_set() and received >= counters["enqueued"]:
                     break
-
+        progress.close()
         for t in threads:
             t.join(timeout=1)
         reader.join(timeout=1)
