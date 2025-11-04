@@ -758,6 +758,7 @@ def grpo_train(
                     use_zero_variance_prompt_filtering = master_config["grpo"].get(
                         "zero_variance_prompt_filtering", False
                     )
+                    effective_gbs = policy.cfg["train_global_batch_size"]
                     if use_overlong_filtering or use_zero_variance_prompt_filtering:
                         loss_multiplier = repeated_batch["loss_multiplier"].clone()
                         if use_overlong_filtering:
