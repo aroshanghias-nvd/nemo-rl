@@ -37,6 +37,7 @@ from tqdm import tqdm
 
 # CONFIG
 MODEL = "nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-FP8"
+GENERATIONS_PER_PROMPT = 4
 MAX_TOKENS = 16384
 TEMPERATURE = 0.6
 TOP_K = 50
@@ -156,39 +157,45 @@ def wait_for_port(host, port, timeout):
 def run_inference_over_shard(client, input_path, output_path, shard_id, num_shards):
     """Run inference sequentially over one shard and write JSONL outputs."""
     total_samples = count_samples(input_path, shard_id, num_shards)
-    progress = tqdm(total=total_samples)
+    progress = tqdm(total=GENERATIONS_PER_PROMPT * total_samples)
     with open(output_path, "w", buffering=1, encoding="utf-8") as f:
         for image, question, answer, metadata in read_samples(input_path, shard_id, num_shards):
-            try:
-                image_data_url = image_to_data_url(image) if image else None
-                q = question + "\n" + PROMPT
-                messages = build_messages(q, image_data_url=image_data_url, reasoning=True)
-                resp = client.chat.completions.create(
-                    model=MODEL,
-                    messages=messages,
-                    temperature=TEMPERATURE,
-                    stream=False,
-                    extra_body={
-                        "top_k": TOP_K,
-                        "top_p": TOP_P,
-                        "mm_processor_kwargs": {"max_num_tiles": NUM_TILES},
-                    },
-                )
-                pred = resp.choices[0].message.content.strip() if resp and resp.choices else ""
-                if "</think>" in pred and "<think>" not in pred:
-                    pred = "<think>\n" + pred
-            except Exception:
-                logging.exception("Error in inference loop")
-                pred = None
-            row = {
-                "image": image,
-                "question": q,
-                "answer": answer,
-                "prediction": pred,
-                **metadata,
-            }
-            f.write(json.dumps(row, ensure_ascii=False) + "\n")
-            progress.update(1)
+            image_data_url = image_to_data_url(image) if image else None
+            q = question + "\n" + PROMPT
+            messages = build_messages(q, image_data_url=image_data_url, reasoning=True)
+            for _ in range(GENERATIONS_PER_PROMPT):
+                row = {
+                    "image": image,
+                    "question": q,
+                    "answer": answer,
+                    **metadata,
+                }
+                try:
+                    resp = client.chat.completions.create(
+                        model=MODEL,
+                        messages=messages,
+                        temperature=TEMPERATURE,
+                        stream=False,
+                        extra_body={
+                            "top_k": TOP_K,
+                            "top_p": TOP_P,
+                            "mm_processor_kwargs": {"max_num_tiles": NUM_TILES},
+                        },
+                    )
+                    if resp and resp.choices:
+                        pred = resp.choices[0].message.content.strip()
+                        if "</think>" in pred and "<think>" not in pred:
+                            pred = "<think>\n" + pred
+                        row["prediction"] = pred
+                        row["finish_reason"] = resp.choices[0].finish_reason
+                        row["prompt_tokens"] = resp.usage.prompt_tokens
+                        row["completion_tokens"] = resp.usage.completion_tokens
+                        row["total_tokens"] = resp.usage.total_tokens
+                except Exception:
+                    logging.exception("Error in inference loop")
+                    row["finish_reason"] = "error"
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
+                progress.update(1)
     progress.close()
 
 
