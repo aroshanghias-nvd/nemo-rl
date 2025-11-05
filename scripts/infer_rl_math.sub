@@ -1,12 +1,12 @@
 #!/bin/bash
-#SBATCH --array=0-149%64
+#SBATCH --array=0-9
 #SBATCH --nodes=1
 #SBATCH --gres=gpu:1
 #SBATCH --partition=batch_block1
 #SBATCH --account=llmservice_fm_vision
 #SBATCH --time=4:00:00
 
-# 150 jobs x 4 hours x ~220 samples/hour/gpu = ~130k samples
+# 10 jobs x 4 hours x ~4000 samples/hour/gpu = ~160k samples
 
 set -euo pipefail
 

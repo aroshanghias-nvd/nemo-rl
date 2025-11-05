@@ -1,25 +1,11 @@
 """
-
 srun -p interactive -A llmservice_fm_vision -N 1 --pty \
     --container-image /lustre/fsw/portfolios/llmservice/users/jseppanen/sqsh/vllm-3225729-cuda-12.8.1.sqsh \
     --container-mounts "/lustre:/lustre,/lustre/fsw/portfolios/llmservice/users/jseppanen/dev:/code" \
-    --gpus 8 \
-    --exclusive \
+    --gpus 1 \
     --job-name "nemo-rl-dev:interactive" \
     -t 04:00:00 \
     bash -l
-
-vllm serve nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-FP8 \
-    --trust-remote-code \
-    --quantization modelopt \
-    --mamba_ssm_cache_dtype float32 \
-    --video-pruning-rate 0 \
-    --data-parallel-size 8 \
-    --tensor-parallel-size 1 \
-    --api-server-count=4 \
-    --gpu-memory-utilization 0.9 \
-    --max-model-len 16384 \
-    >vllm.log 2>&1 &
 """
 
 import json
@@ -29,6 +15,7 @@ import os
 import socket
 import subprocess
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import click
@@ -43,6 +30,8 @@ TEMPERATURE = 0.6
 TOP_K = 50
 TOP_P = 0.95
 NUM_TILES = 12
+BATCH_SIZE = 64
+CONCURRENCY = 2 * BATCH_SIZE
 
 # nano-v2 won't really follow formats that deviate from the SFT data
 # PROMPT = "Answer the question and output ONLY the final answer followed by a newline."
@@ -132,6 +121,10 @@ def launch_vllm_server(port):
         str(0.9),
         "--max-model-len",
         str(MAX_TOKENS),
+        "--max-num-seqs",
+        str(BATCH_SIZE),
+        "--max-num-batched-tokens",
+        str(MAX_TOKENS),
         # "--mm-processor-kwargs",
         # '{"use_fast": true}',
         "--port",
@@ -156,57 +149,77 @@ def wait_for_port(host, port, timeout):
     raise TimeoutError(f"Port {port} not ready")
 
 
+def _infer_one(args):
+    """Execute one completion and return (sample, total_tokens)."""
+    client, messages, sample = args
+    try:
+        resp = client.chat.completions.create(
+            model=MODEL,
+            messages=messages,
+            temperature=TEMPERATURE,
+            stream=False,
+            extra_body={
+                "top_k": TOP_K,
+                "top_p": TOP_P,
+                "mm_processor_kwargs": {"max_num_tiles": NUM_TILES},
+            },
+        )
+        if resp and resp.choices:
+            pred = resp.choices[0].message.content.strip()
+            if "</think>" in pred and "<think>" not in pred:
+                pred = "<think>\n" + pred
+            result = dict(
+                sample,
+                prediction=pred,
+                finish_reason=resp.choices[0].finish_reason,
+                prompt_tokens=resp.usage.prompt_tokens,
+                completion_tokens=resp.usage.completion_tokens,
+                total_tokens=resp.usage.total_tokens,
+            )
+            return result, resp.usage.completion_tokens
+    except Exception:
+        logging.exception("Error in inference task")
+        result = dict(sample, finish_reason="error")
+        return result, 0
+
+
 def run_inference_over_shard(client, input_path, output_path, shard_id, num_shards):
-    """Run inference sequentially over one shard and write JSONL outputs."""
-    total_samples = count_samples(input_path, shard_id, num_shards)
-    progress = tqdm(total=GENERATIONS_PER_PROMPT * total_samples)
-    infer_times = []
-    token_counts = []
-    with open(output_path, "w", buffering=1, encoding="utf-8") as f:
-        for image, question, answer, metadata in read_samples(input_path, shard_id, num_shards):
+    """Run inference concurrently over one shard and write JSONL outputs."""
+
+    def job_iter():
+        """Yield (messages, sample) for each generation task."""
+        for image, question, answer, metadata in read_samples(
+            input_path, shard_id, num_shards
+        ):
             image_data_url = image_to_data_url(image) if image else None
             q = question + "\n" + PROMPT
             messages = build_messages(q, image_data_url=image_data_url, reasoning=True)
+            sample = {
+                "image": image,
+                "question": q,
+                "answer": answer,
+                **metadata,
+            }
             for _ in range(GENERATIONS_PER_PROMPT):
-                row = {
-                    "image": image,
-                    "question": q,
-                    "answer": answer,
-                    **metadata,
-                }
-                try:
-                    start_time = time.perf_counter()
-                    resp = client.chat.completions.create(
-                        model=MODEL,
-                        messages=messages,
-                        temperature=TEMPERATURE,
-                        stream=False,
-                        extra_body={
-                            "top_k": TOP_K,
-                            "top_p": TOP_P,
-                            "mm_processor_kwargs": {"max_num_tiles": NUM_TILES},
-                        },
-                    )
-                    if resp and resp.choices:
-                        pred = resp.choices[0].message.content.strip()
-                        if "</think>" in pred and "<think>" not in pred:
-                            pred = "<think>\n" + pred
-                        row["prediction"] = pred
-                        row["finish_reason"] = resp.choices[0].finish_reason
-                        row["prompt_tokens"] = resp.usage.prompt_tokens
-                        row["completion_tokens"] = resp.usage.completion_tokens
-                        row["total_tokens"] = resp.usage.total_tokens
-                        infer_times.append(time.perf_counter() - start_time)
-                        token_counts.append(resp.usage.total_tokens)
-                except Exception:
-                    logging.exception("Error in inference loop")
-                    row["finish_reason"] = "error"
+                yield client, messages, sample
+
+    total_samples = count_samples(input_path, shard_id, num_shards)
+    progress = tqdm(total=GENERATIONS_PER_PROMPT * total_samples)
+    start_times = []
+    token_counts = []
+    with open(output_path, "w", buffering=1, encoding="utf-8") as f:
+        with ThreadPoolExecutor(max_workers=CONCURRENCY) as executor:
+            start_times.append(time.perf_counter())
+            for row, output_tokens in executor.map(_infer_one, job_iter()):
                 f.write(json.dumps(row, ensure_ascii=False) + "\n")
-                infer_times = infer_times[-20:]
-                token_counts = token_counts[-20:]
-                tps = sum(token_counts) / sum(infer_times)
-                progress.set_description(f"{tps:.2f} TPS")
+                token_counts.append(output_tokens)
+                start_times = start_times[-int(1.1 * CONCURRENCY) :]
+                token_counts = token_counts[-int(1.1 * CONCURRENCY) :]
+                now = time.perf_counter()
+                tps = sum(token_counts) / (now - start_times[0])
+                progress.set_description(f"{tps:.1f} TPS")
                 progress.update()
+                start_times.append(now)
     progress.close()
 
 
