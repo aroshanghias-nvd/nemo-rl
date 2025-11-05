@@ -160,6 +160,8 @@ def run_inference_over_shard(client, input_path, output_path, shard_id, num_shar
     """Run inference sequentially over one shard and write JSONL outputs."""
     total_samples = count_samples(input_path, shard_id, num_shards)
     progress = tqdm(total=GENERATIONS_PER_PROMPT * total_samples)
+    infer_times = []
+    token_counts = []
     with open(output_path, "w", buffering=1, encoding="utf-8") as f:
         for image, question, answer, metadata in read_samples(input_path, shard_id, num_shards):
             image_data_url = image_to_data_url(image) if image else None
@@ -173,6 +175,7 @@ def run_inference_over_shard(client, input_path, output_path, shard_id, num_shar
                     **metadata,
                 }
                 try:
+                    start_time = time.perf_counter()
                     resp = client.chat.completions.create(
                         model=MODEL,
                         messages=messages,
@@ -193,11 +196,17 @@ def run_inference_over_shard(client, input_path, output_path, shard_id, num_shar
                         row["prompt_tokens"] = resp.usage.prompt_tokens
                         row["completion_tokens"] = resp.usage.completion_tokens
                         row["total_tokens"] = resp.usage.total_tokens
+                        infer_times.append(time.perf_counter() - start_time)
+                        token_counts.append(resp.usage.total_tokens)
                 except Exception:
                     logging.exception("Error in inference loop")
                     row["finish_reason"] = "error"
                 f.write(json.dumps(row, ensure_ascii=False) + "\n")
-                progress.update(1)
+                infer_times = infer_times[-20:]
+                token_counts = token_counts[-20:]
+                tps = sum(token_counts) / sum(infer_times)
+                progress.set_description(f"{tps:.2f} TPS")
+                progress.update()
     progress.close()
 
 
