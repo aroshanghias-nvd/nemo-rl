@@ -79,6 +79,7 @@ def format_mulberry():
         }
         row["source_path"] = path
         row["source_index"] = idx
+        row["id"] = 100_000_000 + idx
         assert os.path.exists(row["image"]), f"image not found: {row['image']}"
         yield row
 
@@ -122,6 +123,7 @@ def format_geomverse():
         }
         row["source_path"] = path
         row["source_index"] = idx
+        row["id"] = 200_000_000 + idx
         assert os.path.exists(row["image"]), f"image not found: {row['image']}"
         yield row
 
@@ -187,6 +189,7 @@ def format_metamathqa():
         }
         row["source_path"] = path
         row["source_index"] = idx
+        row["id"] = 300_000_000 + idx
         assert os.path.exists(row["image"]), f"image not found: {row['image']}"
         yield row
 
@@ -249,6 +252,7 @@ def format_educhat_math():
         ]
         row["source_path"] = path
         row["source_index"] = idx
+        row["id"] = 400_000_000 + idx
         yield row
 
 

@@ -87,10 +87,12 @@ def read_samples(jsonl_path, shard_id=0, num_shards=1):
             dataset = row.get("dataset")
             source_path = row.get("source_path")
             source_index = row.get("source_index")
+            sample_id = row.get("id")
             metadata = {
                 "dataset": dataset,
                 "source_path": source_path,
                 "source_index": source_index,
+                "id": sample_id,
             }
             yield image, question, answer, metadata
 
