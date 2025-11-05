@@ -2,7 +2,9 @@
 
 import json
 import re
+import random
 import sys
+from collections import defaultdict
 from glob import glob
 
 from mathruler.grader import grade_answer
@@ -20,7 +22,9 @@ def read_jsonls(pattern):
 
 
 def main():
-    total = correct = malformed = 0
+    total = defaultdict(int)
+    correct = defaultdict(int)
+    malformed = defaultdict(int)
     inner_pattern = r"([^\n]+?)"
     result_pattern = rf"(?:\\\({inner_pattern}\\\)|\${inner_pattern}\$|{inner_pattern})"
     answer_patterns = [
@@ -42,9 +46,9 @@ def main():
                 continue
             response = response.strip()
             break
-        total += 1
+        total[sample["dataset"]] += 1
         if not response:
-            malformed += 1
+            malformed[sample["dataset"]] += 1
             # print("malformed:", output_text)
             row = {
                 "source_path": sample["source_path"],
@@ -60,9 +64,24 @@ def main():
                 "source_index": sample["source_index"],
             }
             print(json.dumps(row, ensure_ascii=False))
-        correct += is_correct
-    print(f"total: {total}, correct: {correct}, incorrect: {total - correct}, malformed: {malformed}", file=sys.stderr)
-    print(f"accuracy: {correct / total}", file=sys.stderr)
+        correct[sample["dataset"]] += is_correct
+        # if is_correct and random.random() < 0.2:
+        #     row = {
+        #         "source_path": sample["source_path"],
+        #         "source_index": sample["source_index"],
+        #     }
+        #     print(json.dumps(row, ensure_ascii=False))
+    total["overall"] = sum(total.values())
+    correct["overall"] = sum(correct.values())
+    malformed["overall"] = sum(malformed.values())
+    for dataset in total:
+        print(
+            f"{dataset}: total: {total[dataset]}, correct: {correct[dataset]}, "
+            f"incorrect: {total[dataset] - correct[dataset] - malformed[dataset]}, "
+            f"malformed: {malformed[dataset]}, "
+            f"accuracy: {correct[dataset] / total[dataset]:.2f}",
+            file=sys.stderr
+        )
 
 
 if __name__ == "__main__":
