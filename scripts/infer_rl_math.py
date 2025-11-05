@@ -232,10 +232,11 @@ def count_samples(jsonl_path, shard_id=0, num_shards=1):
 @click.command()
 @click.argument("input_path", type=click.Path(exists=True))
 @click.argument("output_path", type=click.Path())
-def main(input_path, output_path):
-    task_id = int(os.getenv("SLURM_ARRAY_TASK_ID", "0"))
-    num_tasks = int(os.getenv("SLURM_ARRAY_TASK_COUNT", "1"))
-    port = 19000 + task_id
+@click.option("--shard-id", type=int, default=0)
+@click.option("--num-shards", type=int, default=1)
+def main(input_path, output_path, shard_id, num_shards):
+    task_id = int(os.getenv("SLURM_ARRAY_TASK_ID") or "0")
+    port = 18000 + task_id
 
     proc = None
     log = None
@@ -243,7 +244,7 @@ def main(input_path, output_path):
         proc, log = launch_vllm_server(port)
         wait_for_port("localhost", port, timeout=600)
         client = openai.OpenAI(api_key="dummy", base_url=f"http://localhost:{port}/v1")
-        run_inference_over_shard(client, input_path, output_path, task_id, num_tasks)
+        run_inference_over_shard(client, input_path, output_path, shard_id, num_shards)
     finally:
         if proc is not None:
             try:

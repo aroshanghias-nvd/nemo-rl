@@ -13,6 +13,7 @@ set -euo pipefail
 WORKDIR=/lustre/fsw/portfolios/llmservice/users/jseppanen/dev/nemo-rl-n5p5-mmpr-tiny
 INPUT_JSONL=$WORKDIR/rl_math.jsonl
 OUTPUT_PREFIX=$WORKDIR/rl_math_output
+NUM_SHARDS=10
 
 export HF_HOME=/lustre/fsw/portfolios/llmservice/users/jseppanen/.cache/huggingface
 
@@ -23,4 +24,4 @@ srun \
   --container-mounts=/lustre:/lustre \
   --container-workdir=$WORKDIR \
   --label \
-  bash -lc "source /workspace/.venv/bin/activate && python scripts/infer_rl_math.py '$INPUT_JSONL' \"${OUTPUT_PREFIX}_\${SLURM_ARRAY_TASK_ID}.jsonl\""
+  bash -lc "source /workspace/.venv/bin/activate && python scripts/infer_rl_math.py '$INPUT_JSONL' \"${OUTPUT_PREFIX}_\${SLURM_ARRAY_TASK_ID}.jsonl\" --shard-id=\${SLURM_ARRAY_TASK_ID} --num-shards=${NUM_SHARDS}"
