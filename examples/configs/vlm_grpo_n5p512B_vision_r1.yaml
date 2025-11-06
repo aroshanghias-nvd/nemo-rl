@@ -115,6 +115,9 @@ policy:
       gpu_memory_utilization: 0.9
       max_model_len: ${policy.max_total_sequence_length}
       enforce_eager: False
+    vllm_kwargs:
+      max_num_batched_tokens: ${policy.max_total_sequence_length}
+      max_num_seqs: 64
     colocated:
       # true: generation shares training GPUs
       # false: uses dedicated generation resources
