@@ -1,8 +1,5 @@
-# GRPO Algorithm Configuration
-# Examplar script for running GRPO on Qwen2.5-VL-3B-Instruct
 grpo:
-  # num_prompts_per_step: 512
-  num_prompts_per_step: 64
+  num_prompts_per_step: 512  # 16 nodes
   num_generations_per_prompt: 16
   max_rollout_turns: 1 # for multi-turn rollouts. Math Environments just have 1 turn (answering the question)
   max_num_epochs: 1
@@ -12,6 +9,7 @@ grpo:
   val_period: 10
   val_at_start: false
   overlong_filtering: true
+  zero_variance_prompt_filtering: false
   max_val_samples: 256
   val_batch_size: 256
   seed: 42
@@ -38,28 +36,29 @@ checkpointing:
 
 policy:
   # model_name: "/lustre/fs1/portfolios/llmservice/users/jseppanen/checkpoints/nano_vl_v1347_nemorl"
-  model_name: "/lustre/fs1/portfolios/llmservice/users/jseppanen/checkpoints/sft_n5p5_12b_49152_13p51_txt_video_cot_lcb_recovery_0922_iter_0002653_hf/nemorl"
+  # model_name: "/lustre/fs1/portfolios/llmservice/users/jseppanen/checkpoints/sft_n5p5_12b_49152_13p51_txt_video_cot_lcb_recovery_0922_iter_0002653_hf/nemorl"
+  model_name: "/lustre/fsw/portfolios/llmservice/users/smohsenitahe/checkpoint/mmpr_mpo_nano_v2_ga_w_hallucination_step400_itr2_nemorl"
   tokenizer:
     name: ${policy.model_name} ## specify if you'd like to use a tokenizer different from the model's default
-    # chat template used in SFT
-    chat_template: "{% for message in messages %}{% set content = message['content'] %}{% if message['role'] == 'system' %}{{ '<SPECIAL_10>System\n' + content.replace('/think', '').replace('/no_think', '').strip() + '\n' }}{% elif message['role'] == 'user' %}{{ '<SPECIAL_11>User\n' + content.replace('/think', '').replace('/no_think', '').strip() + '\n' }}{% elif message['role'] == 'assistant' %}{{ '<SPECIAL_11>Assistant\n' + content.strip() + '\n<SPECIAL_12>\n' }}{% endif %}{% endfor %}"
-  train_global_batch_size: 32
-  train_micro_batch_size: 2
+  train_global_batch_size: 512  # 16 nodes
+  train_micro_batch_size: 1
   generation_batch_size: 32 # Only used when generating using HF backend
-  logprob_batch_size: 2
-  max_total_sequence_length: 8192
+  logprob_batch_size: 1
+  max_total_sequence_length: 16384
   precision: "bfloat16"
 
   dtensor_cfg:
-    # _v2: true
+    _v2: false
     enabled: true
-    cpu_offload: False
+    cpu_offload: true
     sequence_parallel: false
     activation_checkpointing: true
     tensor_parallel_size: 1
     context_parallel_size: 1
     custom_parallel_plan: null
     clear_cache_every_n_steps: 1
+    env_vars:
+      NRL_REFIT_BUFFER_MEMORY_RATIO: "0.5"  # reduce refit memory pressure
 
   # dynamic_batching improves performance by ensuring logprob and training microbatches
   # have a sufficent number of tokens to maximize GPU utilization. Specifically, variable length
@@ -101,7 +100,7 @@ policy:
   generation:
     backend: "vllm"
     max_new_tokens: ${policy.max_total_sequence_length}
-    temperature: 0.7
+    temperature: 1.0
     top_p: 1.0  # NB. megatron-rl uses 0.9 but nemo-rl doesn't support top-p
     top_k: null
     stop_token_ids: null
@@ -112,7 +111,7 @@ policy:
       tensor_parallel_size: 1
       pipeline_parallel_size: 1
       expert_parallel_size: 1
-      gpu_memory_utilization: 0.9
+      gpu_memory_utilization: 0.85
       max_model_len: ${policy.max_total_sequence_length}
       enforce_eager: False
       limit_mm_per_prompt: {"image": 12}
@@ -131,7 +130,7 @@ policy:
 data:
   max_input_seq_length: ${policy.max_total_sequence_length}
   prompt_file: null
-  system_prompt_file: examples/prompts/mmpr_tiny_system_prompt.txt
+  system_prompt_file: examples/prompts/nemotron_system_prompt.txt
   dataset_name: "mmpr_tiny"
   split: "train"
   shuffle: true
