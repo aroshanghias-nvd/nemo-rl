@@ -17,6 +17,7 @@ import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from contextlib import contextmanager
 
 import click
 import openai
@@ -38,6 +39,7 @@ CONCURRENCY = 2 * BATCH_SIZE
 # "Answer the question after looking at the image. You should output only a single uppercase character (A, B, C, D, ...)."
 # "Reason and answer the question. Give your final answer between the <answer>...</answer> tags."
 # "Solve the following question step-by-step. Output ONLY the FINAL ANSWER in this format:\n\n\\boxed{your_final_answer_here}"
+# "Please answer the question and put the final answer within \\boxed{...}."
 PROMPT = "Think step-by-step and write the final answer in this format:\n\nThe answer is \\(...\\)."
 
 
@@ -62,28 +64,25 @@ def image_to_data_url(path):
     return f"data:{mime};base64,{b64}"
 
 
-def read_samples(jsonl_path, shard_id=0, num_shards=1):
+def read_samples(jsonl_paths, shard_id=0, num_shards=1):
     """Yield (image, question, answer) from a JSONL file."""
-    with open(jsonl_path, "r") as f:
-        for idx, line in enumerate(f):
-            if (idx % num_shards) != shard_id:
-                continue
-            row = json.loads(line)
-            image = row.get("image")
-            conv = row["conversations"]
-            question = conv[0]["value"]
-            answer = conv[1]["value"]
-            dataset = row.get("dataset")
-            source_path = row.get("source_path")
-            source_index = row.get("source_index")
-            sample_id = row.get("id")
-            metadata = {
-                "dataset": dataset,
-                "source_path": source_path,
-                "source_index": source_index,
-                "id": sample_id,
-            }
-            yield image, question, answer, metadata
+    for _, _, _, line in read_lines(jsonl_paths, shard_id, num_shards):
+        row = json.loads(line)
+        image = row.get("image")
+        conv = row["conversations"]
+        question = conv[0]["value"]
+        answer = conv[1]["value"]
+        dataset = row.get("dataset")
+        source_path = row.get("source_path")
+        source_index = row.get("source_index")
+        sample_id = row.get("id")
+        metadata = {
+            "dataset": dataset,
+            "source_path": source_path,
+            "source_index": source_index,
+            "id": sample_id,
+        }
+        yield image, question, answer, metadata
 
 
 def build_messages(question, image_data_url=None, reasoning=False):
@@ -183,13 +182,13 @@ def _infer_one(args):
         return result, 0
 
 
-def run_inference_over_shard(client, input_path, output_path, shard_id, num_shards):
+def run_inference_over_shard(client, input_paths, output_path, shard_id, num_shards):
     """Run inference concurrently over one shard and write JSONL outputs."""
 
     def job_iter():
         """Yield (messages, sample) for each generation task."""
         for image, question, answer, metadata in read_samples(
-            input_path, shard_id, num_shards
+            input_paths, shard_id, num_shards
         ):
             image_data_url = image_to_data_url(image) if image else None
             q = question + "\n" + PROMPT
@@ -203,38 +202,66 @@ def run_inference_over_shard(client, input_path, output_path, shard_id, num_shar
             for _ in range(GENERATIONS_PER_PROMPT):
                 yield client, messages, sample
 
-    total_samples = count_samples(input_path, shard_id, num_shards)
-    progress = tqdm(total=GENERATIONS_PER_PROMPT * total_samples)
-    start_times = []
-    token_counts = []
+    total_samples = count_samples(input_paths, shard_id, num_shards)
     with open(output_path, "w", buffering=1, encoding="utf-8") as f:
         with ThreadPoolExecutor(max_workers=CONCURRENCY) as executor:
-            start_times.append(time.perf_counter())
-            for row, output_tokens in executor.map(_infer_one, job_iter()):
-                f.write(json.dumps(row, ensure_ascii=False) + "\n")
-                token_counts.append(output_tokens)
-                start_times = start_times[-int(1.1 * CONCURRENCY) :]
-                token_counts = token_counts[-int(1.1 * CONCURRENCY) :]
-                now = time.perf_counter()
-                tps = sum(token_counts) / (now - start_times[0])
+            with show_progress(GENERATIONS_PER_PROMPT * total_samples) as progress:
+                for row, output_tokens in executor.map(_infer_one, job_iter()):
+                    f.write(json.dumps(row, ensure_ascii=False) + "\n")
+                    progress.update(output_tokens)
+
+
+@contextmanager
+def show_progress(total):
+    """Yield a tracker that updates tqdm progress and TPS."""
+    progress = tqdm(total=total)
+    start_times = []
+    token_counts = []
+    start_times.append(time.perf_counter())
+
+    class _Tracker:
+        def update(self, token_count: int):
+            now = time.perf_counter()
+            token_counts.append(token_count)
+            if len(start_times) > CONCURRENCY:
+                # Calculate tokens/sec throughput but avoid inflated values due to concurrent & batched inference
+                tps = min(
+                    sum(token_counts[-i:]) / (now - start_times[-i])
+                    for i in range(CONCURRENCY, min(len(start_times), 2 * CONCURRENCY))
+                )
                 progress.set_description(f"{tps:.1f} TPS")
-                progress.update()
-                start_times.append(now)
-    progress.close()
+            progress.update()
+            start_times.append(now)
+
+    try:
+        yield _Tracker()
+    finally:
+        progress.close()
 
 
-def count_samples(jsonl_path, shard_id=0, num_shards=1):
+def read_lines(paths, shard_id=0, num_shards=1):
+    """Yield lines from a files based on shard ID."""
+    global_idx = -1
+    for path in sorted(paths):
+        with open(path, "r") as f:
+            for file_idx, line in enumerate(f):
+                global_idx += 1
+                if (global_idx % num_shards) != shard_id:
+                    continue
+                yield global_idx, file_idx, path, line
+
+
+def count_samples(paths, shard_id=0, num_shards=1):
     """Return number of non-empty lines in a JSONL file."""
-    with open(jsonl_path, "r") as f:
-        return sum(1 for idx, line in enumerate(f) if (idx % num_shards) == shard_id)
+    return sum(1 for _ in read_lines(paths, shard_id, num_shards))
 
 
 @click.command()
-@click.argument("input_path", type=click.Path(exists=True))
+@click.argument("input_paths", type=click.Path(exists=True), nargs=-1)
 @click.argument("output_path", type=click.Path())
 @click.option("--shard-id", type=int, default=0)
 @click.option("--num-shards", type=int, default=1)
-def main(input_path, output_path, shard_id, num_shards):
+def main(input_paths, output_path, shard_id, num_shards):
     task_id = int(os.getenv("SLURM_ARRAY_TASK_ID") or "0")
     port = 18000 + task_id
 
@@ -244,7 +271,7 @@ def main(input_path, output_path, shard_id, num_shards):
         proc, log = launch_vllm_server(port)
         wait_for_port("localhost", port, timeout=600)
         client = openai.OpenAI(api_key="dummy", base_url=f"http://localhost:{port}/v1")
-        run_inference_over_shard(client, input_path, output_path, shard_id, num_shards)
+        run_inference_over_shard(client, input_paths, output_path, shard_id, num_shards)
     finally:
         if proc is not None:
             try:
