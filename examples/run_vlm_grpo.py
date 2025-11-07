@@ -120,8 +120,9 @@ def hf_data_processor(
         datum_dict = format_geometry3k_dataset(datum_dict)
     elif task_data_spec.task_name == "vision_r1":
         datum_dict = format_vision_r1_dataset(datum_dict)
-    elif task_data_spec.task_name == "mmpr_tiny":
+    elif task_data_spec.task_name in ("mmpr_tiny", "tinier_math"):
         datum_dict = format_mmpr_tiny_dataset(datum_dict)
+        datum_dict["task_name"] = task_data_spec.task_name
     else:
         raise ValueError(f"No data processor for task {task_data_spec.task_name}")
 
@@ -131,7 +132,10 @@ def hf_data_processor(
 
     message_log: LLMMessageLogType = []
     ### only one round of interaction is assumed, this can easily be extended to a conversational setting
-    system_message = {"role": "system", "content": [{"type": "text", "text": task_data_spec.system_prompt}]}
+    system_message = {
+        "role": "system",
+        "content": [{"type": "text", "text": task_data_spec.system_prompt}],
+    }
     user_message = {"role": "user", "content": []}
     #
     images = []
@@ -209,9 +213,7 @@ def hf_data_processor(
     # specifically for gemma, we need to add token_type_ids to the user message as a sequence-type value
     if "token_type_ids" in message_both:
         system_message["token_type_ids"] = message_sys["token_type_ids"][0]
-        user_message["token_type_ids"] = message_both["token_type_ids"][0][
-            sys_len:
-        ]
+        user_message["token_type_ids"] = message_both["token_type_ids"][0][sys_len:]
 
     ### append to user message
     message_log.append(system_message)

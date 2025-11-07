@@ -28,6 +28,7 @@ from nemo_rl.data.datasets.response_datasets.response_dataset import ResponseDat
 from nemo_rl.data.datasets.response_datasets.squad import SquadDataset
 from nemo_rl.data.datasets.response_datasets.vision_r1 import VisionR1Dataset
 from nemo_rl.data.datasets.response_datasets.mmpr_tiny import MMPRTinyDataset
+from nemo_rl.data.datasets.response_datasets.tinier_math import TinierMathDataset
 from nemo_rl.data.datasets.utils import get_extra_kwargs
 
 
@@ -120,6 +121,11 @@ def load_response_dataset(data_config, seed: int = 42):
             cache_dir=data_config.get("cache_dir"),
             val_size=data_config.get("val_size", 500),
         )
+    elif dataset_name == "tinier_math":
+        base_dataset: Any = TinierMathDataset(
+            train_data_path=data_config["train_data_path"],
+            prompt_file=data_config.get("prompt_file"),
+        )
     else:
         raise ValueError(
             f"Unsupported {dataset_name=}. "
@@ -135,6 +141,7 @@ __all__ = [
     "DeepScalerDataset",
     "Geometry3KDataset",
     "MMPRTinyDataset",
+    "TinierMathDataset",
     "OpenAIFormatDataset",
     "OasstDataset",
     "OpenMathInstruct2Dataset",
