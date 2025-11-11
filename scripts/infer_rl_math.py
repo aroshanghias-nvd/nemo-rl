@@ -1,6 +1,6 @@
 """
 srun -p interactive -A llmservice_fm_vision -N 1 --pty \
-    --container-image /lustre/fsw/portfolios/llmservice/users/jseppanen/sqsh/vllm-3225729-cuda-12.8.1.sqsh \
+    --container-image /lustre/fsw/portfolios/llmservice/users/jseppanen/sqsh/vllm-c799126-cuda-12.8.1.sqsh \
     --container-mounts "/lustre:/lustre,/lustre/fsw/portfolios/llmservice/users/jseppanen/dev:/code" \
     --gpus 1 \
     --job-name "nemo-rl-dev:interactive" \
@@ -24,8 +24,12 @@ import openai
 from tqdm import tqdm
 
 # CONFIG
-MODEL = "nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-FP8"
-GENERATIONS_PER_PROMPT = 4
+# MODEL = "nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-FP8"
+# PRECISION = "fp8"
+# MODEL = "/lustre/fsw/portfolios/llmservice/users/smohsenitahe/checkpoint/mmpr_mpo_sft_n5p5_12b_300k_13p52_cot_ruler_only_from_iter_2400_1011/step_425_nemorl"
+MODEL = "/lustre/fsw/portfolios/llmservice/users/jseppanen/checkpoints/mmpr_mpo_sft_n5p5_12b_300k_13p52_cot_ruler_only_from_iter_2400_1011_step_425"
+PRECISION = "bf16"
+GENERATIONS_PER_PROMPT = 5
 MAX_TOKENS = 16384
 TEMPERATURE = 0.6
 TOP_K = 50
@@ -40,7 +44,8 @@ CONCURRENCY = 2 * BATCH_SIZE
 # "Reason and answer the question. Give your final answer between the <answer>...</answer> tags."
 # "Solve the following question step-by-step. Output ONLY the FINAL ANSWER in this format:\n\n\\boxed{your_final_answer_here}"
 # "Please answer the question and put the final answer within \\boxed{...}."
-PROMPT = "Think step-by-step and write the final answer in this format:\n\nThe answer is \\(...\\)."
+# PROMPT = "Think step-by-step and write the final answer in this format:\n\nThe answer is \\(...\\)."
+PROMPT = "Think step-by-step and write the final answer in this format:\n\nFinal answer: ..."  # MMPR format
 
 
 def detect_mime_type(path):
@@ -64,11 +69,15 @@ def image_to_data_url(path):
     return f"data:{mime};base64,{b64}"
 
 
-def read_samples(jsonl_paths, shard_id=0, num_shards=1):
+def read_rl_math_samples(jsonl_path, shard_id=0, num_shards=1):
     """Yield (image, question, answer) from a JSONL file."""
-    for _, _, _, line in read_lines(jsonl_paths, shard_id, num_shards):
+    for _, line in read_lines(jsonl_path, shard_id, num_shards):
         row = json.loads(line)
-        image = row.get("image")
+        images = row.get("image")
+        if not images:
+            images = []
+        elif not isinstance(images, list):
+            images = [images]
         conv = row["conversations"]
         question = conv[0]["value"]
         answer = conv[1]["value"]
@@ -82,17 +91,79 @@ def read_samples(jsonl_paths, shard_id=0, num_shards=1):
             "source_index": source_index,
             "id": sample_id,
         }
-        yield image, question, answer, metadata
+        yield images, question, answer, metadata
 
 
-def build_messages(question, image_data_url=None, reasoning=False):
-    """Build OpenAI chat messages with optional image."""
+def read_mmpr_samples(dataset_path, shard_id=0, num_shards=1):
+    """Yield (image, question, answer) from MMPR-1.2 dataset directory."""
+    dataset_path = Path(dataset_path)
+    meta = json.loads((dataset_path / "meta.json").read_text(encoding="utf-8"))
+    root = dataset_path.parent
+    sample_idx = 0
+    for subset_idx, (subset_name, subset) in enumerate(meta.items()):
+        if subset_name == "dpo_hallucination":
+            continue
+        skip = 0
+        total = 0
+        subset_path = root / subset["annotation"]
+        for file_idx, line in read_lines(subset_path):
+            total += 1
+            row = json.loads(line)
+            images = row.get("image")
+            if not images:
+                images = []
+            elif not isinstance(images, list):
+                images = [images]
+            images = [root / subset["root"] / i for i in images]
+            for img in images:
+                if not img.exists():
+                    print(f"image not found: {img}")
+                    skip += 1
+                    continue
+            images = [str(img) for img in images]
+            question = row["question"]
+            if "answer" in row:
+                answer = row["answer"]
+            elif "answer_gt" in row:
+                answer = row["answer_gt"]
+            elif "chosen" in row:
+                # some preference data subsets are verifiable
+                if subset_name in [
+                    "inat_train2018_merge_en_20240811_sr0.50_wo_image",
+                    "mavis_function_abs_pairs_vqa_direct_rules",
+                    "geometry3k_en_20240402_extracted_pairs_vqa_direct_rules",
+                    "m3cot_train_extracted_pairs_vqa_direct_rules",
+                    "scienceqa_multi_choice_en_20240402_extracted_pairs_vqa_direct_rules",
+                ]:
+                    answer = row["chosen"]
+                else:
+                    skip += 1
+                    continue
+            else:
+                raise ValueError(f"Unknown answer type: {subset_path}:{row}")
+            # shard only after filtering for verifiable samples because some subsets get skipped as a whole
+            sample_idx += 1
+            if (sample_idx % num_shards) != shard_id:
+                continue
+            metadata = {
+                "dataset": f"mmpr-1.2-{subset_name}",
+                "source_path": str(subset_path),
+                "source_index": file_idx,
+                "id": 100_000_000 * (subset_idx + 1) + sample_idx,
+            }
+            yield images, question, answer, metadata
+        if skip:
+            print(f"skipped {skip}/{total} samples in {subset['annotation']}")
+
+
+def build_messages(question, images=None, reasoning=False):
+    """Build OpenAI chat messages with optional images."""
     messages = [{"role": "system", "content": "/think" if reasoning else "/no_think"}]
-    if image_data_url:
-        content = [
-            {"type": "text", "text": question},
-            {"type": "image_url", "image_url": {"url": image_data_url}},
-        ]
+    if images:
+        assert isinstance(images, list), f"images must be a list, got {type(images)}"
+        content = [{"type": "text", "text": question}]
+        for image in images:
+            content.append({"type": "image_url", "image_url": {"url": image_to_data_url(image)}})
         messages.append({"role": "user", "content": content})
     else:
         messages.append({"role": "user", "content": question})
@@ -108,14 +179,10 @@ def launch_vllm_server(port):
         "--trust-remote-code",
         "--api-server-count",
         "2",
-        "--quantization",
-        "modelopt",
         "--mamba_ssm_cache_dtype",
         "float32",
         "--video-pruning-rate",
         "0",
-        "--tensor-parallel-size",
-        "1",
         "--gpu-memory-utilization",
         str(0.9),
         "--max-model-len",
@@ -129,6 +196,12 @@ def launch_vllm_server(port):
         "--port",
         str(port),
     ]
+    if PRECISION == "fp8":
+        cmd.extend(["--quantization", "modelopt"])
+    elif PRECISION == "bf16":
+        cmd.extend(["--dtype", "bfloat16"])
+    else:
+        raise ValueError(f"Unsupported precision: {PRECISION}")
     env = os.environ.copy()
     task_id = int(os.getenv("SLURM_ARRAY_TASK_ID") or "0")
     log = open(f"vllm_{task_id}.log", "w")
@@ -136,10 +209,14 @@ def launch_vllm_server(port):
     return proc, log
 
 
-def wait_for_port(host, port, timeout):
-    """Block until TCP port opens or timeout."""
+def wait_for_port(host, port, timeout, proc=None):
+    """Block until TCP port opens, process exits, or timeout."""
     end = time.time() + timeout
     while time.time() < end:
+        if proc is not None and proc.poll() is not None:
+            raise RuntimeError(
+                f"vLLM process exited with code {proc.returncode} before port {port} became ready"
+            )
         try:
             with socket.create_connection((host, port), timeout=1):
                 return
@@ -182,27 +259,27 @@ def _infer_one(args):
         return result, 0
 
 
-def run_inference_over_shard(client, input_paths, output_path, shard_id, num_shards):
+def run_inference_over_shard(client, input_path, output_path, shard_id, num_shards):
     """Run inference concurrently over one shard and write JSONL outputs."""
+    reader = read_mmpr_samples  # read_rl_math_samples
 
     def job_iter():
         """Yield (messages, sample) for each generation task."""
-        for image, question, answer, metadata in read_samples(
-            input_paths, shard_id, num_shards
-        ):
-            image_data_url = image_to_data_url(image) if image else None
-            q = question + "\n" + PROMPT
-            messages = build_messages(q, image_data_url=image_data_url, reasoning=True)
+        for images, question, answer, metadata in reader(input_path, shard_id, num_shards):
+            # mmpr already has output formatting instructions in each question
+            # question = question + "\n" + PROMPT
+            messages = build_messages(question, images=images, reasoning=True)
             sample = {
-                "image": image,
-                "question": q,
+                "images": images,
+                "question": question,
                 "answer": answer,
                 **metadata,
             }
             for _ in range(GENERATIONS_PER_PROMPT):
                 yield client, messages, sample
 
-    total_samples = count_samples(input_paths, shard_id, num_shards)
+    # total_samples = sum(1 for _ in reader(input_path, shard_id, num_shards))
+    total_samples = 493392 // num_shards  # mmpr-1.2
     with open(output_path, "w", buffering=1, encoding="utf-8") as f:
         with ThreadPoolExecutor(max_workers=CONCURRENCY) as executor:
             with show_progress(GENERATIONS_PER_PROMPT * total_samples) as progress:
@@ -239,29 +316,21 @@ def show_progress(total):
         progress.close()
 
 
-def read_lines(paths, shard_id=0, num_shards=1):
+def read_lines(path, shard_id=0, num_shards=1):
     """Yield lines from a files based on shard ID."""
-    global_idx = -1
-    for path in sorted(paths):
-        with open(path, "r") as f:
-            for file_idx, line in enumerate(f):
-                global_idx += 1
-                if (global_idx % num_shards) != shard_id:
-                    continue
-                yield global_idx, file_idx, path, line
-
-
-def count_samples(paths, shard_id=0, num_shards=1):
-    """Return number of non-empty lines in a JSONL file."""
-    return sum(1 for _ in read_lines(paths, shard_id, num_shards))
+    with open(path, "r") as f:
+        for sample_idx, line in enumerate(f):
+            if (sample_idx % num_shards) != shard_id:
+                continue
+            yield sample_idx, line
 
 
 @click.command()
-@click.argument("input_paths", type=click.Path(exists=True), nargs=-1)
+@click.argument("input_path", type=click.Path(exists=True))
 @click.argument("output_path", type=click.Path())
 @click.option("--shard-id", type=int, default=0)
 @click.option("--num-shards", type=int, default=1)
-def main(input_paths, output_path, shard_id, num_shards):
+def main(input_path, output_path, shard_id, num_shards):
     task_id = int(os.getenv("SLURM_ARRAY_TASK_ID") or "0")
     port = 18000 + task_id
 
@@ -269,9 +338,9 @@ def main(input_paths, output_path, shard_id, num_shards):
     log = None
     try:
         proc, log = launch_vllm_server(port)
-        wait_for_port("localhost", port, timeout=600)
+        wait_for_port("localhost", port, timeout=600, proc=proc)
         client = openai.OpenAI(api_key="dummy", base_url=f"http://localhost:{port}/v1")
-        run_inference_over_shard(client, input_paths, output_path, shard_id, num_shards)
+        run_inference_over_shard(client, input_path, output_path, shard_id, num_shards)
     finally:
         if proc is not None:
             try:

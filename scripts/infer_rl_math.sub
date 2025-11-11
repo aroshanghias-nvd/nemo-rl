@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --array=0-9
+#SBATCH --array=0-209
 #SBATCH --nodes=1
 #SBATCH --gres=gpu:1
 #SBATCH --partition=batch_block1
@@ -11,17 +11,22 @@
 set -euo pipefail
 
 WORKDIR=/lustre/fsw/portfolios/llmservice/users/jseppanen/dev/nemo-rl-n5p5-mmpr-tiny
-INPUT_JSONL=$WORKDIR/rl_math.jsonl
-OUTPUT_PREFIX=$WORKDIR/rl_math_output
-NUM_SHARDS=10
+INPUT_PATH=/lustre/fsw/portfolios/llmservice/users/smohsenitahe/forked_rl/nano_v2/RL/MMPR-v1.2
+OUTPUT_PREFIX=$WORKDIR/mmpr_output
+NUM_SHARDS=210  # 493k * 5 generations
+
+# WORKDIR=/lustre/fsw/portfolios/llmservice/users/jseppanen/dev/nemo-rl-n5p5-mmpr-tiny
+# INPUT_PATH=$WORKDIR/rl_math.jsonl
+# OUTPUT_PREFIX=$WORKDIR/rl_math_output
+# NUM_SHARDS=10
 
 export HF_HOME=/lustre/fsw/portfolios/llmservice/users/jseppanen/.cache/huggingface
 
 srun \
   --ntasks-per-node=1 \
   --nodes=$SLURM_JOB_NUM_NODES \
-  --container-image=/lustre/fsw/portfolios/llmservice/users/jseppanen/sqsh/vllm-3225729-cuda-12.8.1.sqsh \
+  --container-image=/lustre/fsw/portfolios/llmservice/users/jseppanen/sqsh/vllm-c799126-cuda-12.8.1.sqsh \
   --container-mounts=/lustre:/lustre \
   --container-workdir=$WORKDIR \
   --label \
-  bash -lc "source /workspace/.venv/bin/activate && python scripts/infer_rl_math.py '$INPUT_JSONL' \"${OUTPUT_PREFIX}_\${SLURM_ARRAY_TASK_ID}.jsonl\" --shard-id=\${SLURM_ARRAY_TASK_ID} --num-shards=${NUM_SHARDS}"
+  bash -lc "source /venv/bin/activate && python scripts/infer_rl_math.py '$INPUT_PATH' \"${OUTPUT_PREFIX}_\${SLURM_ARRAY_TASK_ID}.jsonl\" --shard-id=\${SLURM_ARRAY_TASK_ID} --num-shards=${NUM_SHARDS}"
