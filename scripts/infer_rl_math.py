@@ -228,19 +228,22 @@ def wait_for_port(host, port, timeout, proc=None):
 def _infer_one(args):
     """Execute one completion and return (sample, total_tokens)."""
     client, messages, sample = args
-    try:
-        resp = client.chat.completions.create(
-            model=MODEL,
-            messages=messages,
-            temperature=TEMPERATURE,
-            stream=False,
-            extra_body={
-                "top_k": TOP_K,
-                "top_p": TOP_P,
-                "mm_processor_kwargs": {"max_num_tiles": NUM_TILES},
-            },
-        )
-        if resp and resp.choices:
+    retries = 5
+    for retry in range(retries):
+        try:
+            resp = client.chat.completions.create(
+                model=MODEL,
+                messages=messages,
+                temperature=TEMPERATURE,
+                stream=False,
+                extra_body={
+                    "top_k": TOP_K,
+                    "top_p": TOP_P,
+                    "mm_processor_kwargs": {"max_num_tiles": NUM_TILES},
+                },
+            )
+            if not (resp and resp.choices):
+                raise ValueError(f"No response: {resp}")
             pred = resp.choices[0].message.content.strip()
             if "</think>" in pred and "<think>" not in pred:
                 pred = "<think>\n" + pred
@@ -253,10 +256,13 @@ def _infer_one(args):
                 total_tokens=resp.usage.total_tokens,
             )
             return result, resp.usage.completion_tokens
-    except Exception:
-        logging.exception("Error in inference task")
-        result = dict(sample, finish_reason="error")
-        return result, 0
+        except Exception as e:
+            if retry < retries - 1:
+                logging.warning(f"Inference failed: {e}, retrying {retry + 1}/{retries}...")
+                time.sleep(2 ** retry)
+                continue
+            logging.exception("Error in inference task")
+            raise
 
 
 def run_inference_over_shard(client, input_path, output_path, shard_id, num_shards):
