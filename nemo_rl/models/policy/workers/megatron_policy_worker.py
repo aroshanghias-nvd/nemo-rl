@@ -297,6 +297,8 @@ def setup_megatron_model(
                 if isinstance(model_module, Float16Module):
                     model_module = model_module.module
                 # Handle VLM models
+                if hasattr(model_module, "llava_model"):
+                    model_module = model_module.llava_model
                 if hasattr(model_module, "language_model"):
                     model_module = model_module.language_model
                 for layer in model_module.decoder.layers:
@@ -1370,8 +1372,8 @@ class MegatronPolicyWorker(AbstractPolicyWorker, ColocatablePolicyInterface):
             multimodal_data = data_dict.get_multimodal_dict(
                 as_tensors=True, device=input_ids.device
             )
-            if len(multimodal_data) > 0:
-                position_ids = None
+            # if len(multimodal_data) > 0:
+            #     position_ids = None
 
             additional_kwargs = {}
             # Mamba models currently do not support packed_seq_params
@@ -1381,6 +1383,12 @@ class MegatronPolicyWorker(AbstractPolicyWorker, ColocatablePolicyInterface):
             if self.defer_fp32_logits:
                 additional_kwargs["fp32_output"] = False
 
+            # TODO(yifu): cleanup. currently needed for nano-v2-vl
+            multimodal_data["images"] = multimodal_data["pixel_values"].to(
+                torch.bfloat16
+            )
+            del multimodal_data["pixel_values"]
+
             output_tensor = model(
                 input_ids=input_ids_cp_sharded,
                 position_ids=position_ids,
@@ -1388,6 +1396,8 @@ class MegatronPolicyWorker(AbstractPolicyWorker, ColocatablePolicyInterface):
                 **multimodal_data,
                 **additional_kwargs,
             )
+            if type(output_tensor) == tuple:
+                output_tensor = output_tensor[0]
 
             # Apply temperature scaling to logits for training
             # This matches the dtensor worker's _apply_temperature_scaling in the train method

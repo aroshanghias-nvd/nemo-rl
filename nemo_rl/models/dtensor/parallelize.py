@@ -661,7 +661,6 @@ def _parallelize_model(
         num_attention_heads = model.language_model.config.num_attention_heads
         num_key_value_heads = model.language_model.config.num_key_value_heads
 
-    # transformers_modules.OpenGVLab.InternVL3_5-4B-MPO.d8c8081570cabbd86984bd849617391f10e962e2.modeling_internvl_chat.InternVLChatModel
     elif model_cls.__name__ == "InternVLChatModel":
         layers: list = []
         for layer in model.language_model.model.layers:
