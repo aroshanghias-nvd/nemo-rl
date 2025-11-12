@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import logging
 import re
 from typing import Callable, Optional
 
@@ -281,3 +282,80 @@ def verl_geo3k_reward(
     final_reward = (1.0 - format_score) * acc_reward_value + format_score * format_reward_value
 
     return final_reward, is_correct
+
+
+def progressive_geo3k_reward(
+    ground_truth: str,
+    response: str,
+    format_score: float = 0.1,
+) -> tuple[float, bool]:
+    r"""Progressive reward function for MMPR-Tiny task.
+
+    Gives partial reward if there are multiple \\boxed{} answers.
+
+    Args:
+        ground_truth: The correct answer
+        response: Model's complete response (with <think> and \\boxed{})
+        format_score: Weight for format check (default 0.1 = 10%)
+
+    Returns:
+        (reward, is_correct) where reward = (1-format_score)*accuracy + format_score*format
+    """
+    # Format check
+    if "</think>" in response and "<think>" not in response:
+        # XXX nano-v2 tokenizer adds <think> in reasoning mode, but that is omitted from prediction
+        response = "<think>\n" + response
+    think_blocks = list(re.finditer(r"<think>.*?</think>", response, re.DOTALL))
+    if think_blocks:
+        # remove first think block
+        response = response[think_blocks[0].end() :].strip()
+
+    boxed_answers = extract_all_boxed(response)
+    format_reward_value = 1.0 if len(think_blocks) == 1 and len(boxed_answers) == 1 else 0.0
+
+    # Accuracy check
+    if boxed_answers:
+        grades = []
+        for boxed_answer in boxed_answers[:5]:
+            try:
+                ok = grade_answer(boxed_answer, ground_truth)
+                grades.append(1.0 if ok else 0.0)
+            except Exception:
+                logging.exception("Mathruler failed to grade answer: %s", boxed_answer)
+                grades.append(0.0)
+        if len(boxed_answers) > 5:
+            grades.extend([0.0] * (len(boxed_answers) - 5))
+        acc_reward_value = float(np.mean(grades))
+        is_correct = any(x > 0.0 for x in grades)
+    else:
+        acc_reward_value = 0.0
+        is_correct = False
+
+    # penalize 10% for any additional syntax error
+    extra_thinks = response.count("<think>") + response.count("</think>")
+    extra_boxeds = max(0, len(boxed_answers) - 1)
+    acc_reward_value = acc_reward_value * (0.9 ** (extra_thinks + extra_boxeds))
+
+    # Weighted combination (verl's exact formula)
+    final_reward = (1.0 - format_score) * acc_reward_value + format_score * format_reward_value
+    return final_reward, is_correct
+
+
+def extract_all_boxed(text: str) -> list[str]:
+    if "\\boxed{" not in text:
+        return []
+    results = []
+    # require that boxed can't be nested
+    parts = text.split("\\boxed{")[1:]
+    for part in parts:
+        depth = 1
+        for i, char in enumerate(part):
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+            if depth == 0:
+                results.append(part[:i])
+                break
+        # if parens are not balanced, the answer is ignored
+    return results

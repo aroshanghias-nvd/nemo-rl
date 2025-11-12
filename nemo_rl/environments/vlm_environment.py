@@ -36,6 +36,8 @@ from nemo_rl.environments.rewards import (
     format_reward,
     math_expression_reward,
     vision_r1_reward,
+    verl_geo3k_reward,
+    progressive_geo3k_reward,
 )
 from nemo_rl.environments.utils import chunk_list_to_workers
 
@@ -80,8 +82,9 @@ class VLMVerifyWorker:
             elif reward_func_name == "vision_r1":
                 reward_func = vision_r1_reward
             elif reward_func_name == "verl_geo3k":
-                from nemo_rl.environments.rewards import verl_geo3k_reward
                 reward_func = verl_geo3k_reward
+            elif reward_func_name == "progressive_geo3k":
+                reward_func = progressive_geo3k_reward
             else:
                 raise ValueError(f"Invalid reward function: {reward_func_name}")
 
