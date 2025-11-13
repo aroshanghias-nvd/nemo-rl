@@ -29,6 +29,7 @@ from nemo_rl.environments.interfaces import (
 from nemo_rl.environments.metrics import (
     calculate_pass_rate_per_prompt,
 )
+from nemo_rl.environments.mmpr_filtered_reward import mmpr_filtered_reward
 from nemo_rl.environments.rewards import (
     bbox_giou_reward,
     combine_reward_functions,
@@ -85,6 +86,8 @@ class VLMVerifyWorker:
                 reward_func = verl_geo3k_reward
             elif reward_func_name == "progressive_geo3k":
                 reward_func = progressive_geo3k_reward
+            elif reward_func_name == "mmpr_filtered":
+                reward_func = mmpr_filtered_reward
             else:
                 raise ValueError(f"Invalid reward function: {reward_func_name}")
 

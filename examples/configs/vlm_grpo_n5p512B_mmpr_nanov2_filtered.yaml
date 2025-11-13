@@ -2,11 +2,11 @@ grpo:
   num_prompts_per_step: 512  # 16 nodes
   num_generations_per_prompt: 16
   max_rollout_turns: 1 # for multi-turn rollouts. Math Environments just have 1 turn (answering the question)
-  max_num_epochs: 1
+  max_num_epochs: 2
   max_num_steps: 1000000
   normalize_rewards: true
   use_leave_one_out_baseline: true
-  val_period: 10
+  val_period: 0
   val_at_start: false
   overlong_filtering: true
   zero_variance_prompt_filtering: false
@@ -17,7 +17,7 @@ grpo:
 loss_fn:
   reference_policy_kl_penalty: 0.0
   ratio_clip_min: 0.2
-  ratio_clip_max: 0.2
+  ratio_clip_max: 0.28  # Clip-Higher, ref: DAPO, JustRL
   ratio_clip_c: null
   # (default off) loss formulation improvements (docs/guides/grpo.md#loss)
   use_on_policy_kl_approximation: false
@@ -27,7 +27,7 @@ loss_fn:
 
 checkpointing:
   enabled: true
-  checkpoint_dir: "results/grpo_n5p512B_mmpr_tiny_dev"
+  checkpoint_dir: "results/grpo_n5p512B_mmpr_nanov2_filtered_dev"
   metric_name: "val_reward"
   higher_is_better: true
   keep_top_k: 50
@@ -35,9 +35,8 @@ checkpointing:
   checkpoint_must_save_by: "00:03:45:00"  # assuming 4 hour slurm jobs
 
 policy:
-  # model_name: "/lustre/fs1/portfolios/llmservice/users/jseppanen/checkpoints/nano_vl_v1347_nemorl"
-  # model_name: "/lustre/fs1/portfolios/llmservice/users/jseppanen/checkpoints/sft_n5p5_12b_49152_13p51_txt_video_cot_lcb_recovery_0922_iter_0002653_hf/nemorl"
-  model_name: "/lustre/fsw/portfolios/llmservice/users/smohsenitahe/checkpoint/mmpr_mpo_nano_v2_ga_w_hallucination_step400_itr2_nemorl"
+  # model_name: "/lustre/fsw/portfolios/llmservice/users/smohsenitahe/checkpoint/mmpr_mpo_nano_v2_ga_w_hallucination_step400_itr2_nemorl"
+  model_name: "/lustre/fsw/portfolios/llmservice/users/smohsenitahe/checkpoint/mmpr_mpo_sft_n5p5_12b_300k_13p52_cot_ruler_only_from_iter_2400_1011/step_425_nemorl"
   tokenizer:
     name: ${policy.model_name} ## specify if you'd like to use a tokenizer different from the model's default
   train_global_batch_size: 512  # 16 nodes
@@ -56,7 +55,7 @@ policy:
     tensor_parallel_size: 1
     context_parallel_size: 1
     custom_parallel_plan: null
-    clear_cache_every_n_steps: 1
+    clear_cache_every_n_steps: 20
     env_vars:
       NRL_REFIT_BUFFER_MEMORY_RATIO: "0.5"  # reduce refit memory pressure
 
@@ -129,22 +128,22 @@ policy:
 
 data:
   max_input_seq_length: ${policy.max_total_sequence_length}
+  train_data_path: "/lustre/fs1/portfolios/llmservice/projects/llmservice_nlp_fm/datasets/eagle-next/image_data/rl_data/mmpr1.2_nanov2_filtered/mmpr_nanov2_filtered_v1.jsonl"
   prompt_file: null
   system_prompt_file: examples/prompts/nemotron_system_prompt.txt
-  dataset_name: "mmpr_tiny"
+  dataset_name: "mmpr_nanov2_filtered"
   split: "train"
-  shuffle: true
-  val_size: 500  # Number of samples for validation (default 500, set to 0 to use all for training)
-  cache_dir: "/lustre/fsw/portfolios/llmservice/users/ikarmanov/rl_datasets/mmpr_tiny_images"
+  shuffle: false  # dataset has been pre-ordered based on stratified difficulty
+  val_size: 0
 
 env:
-  mmpr_tiny:
+  mmpr_nanov2_filtered:
     num_workers: 8
     reward_functions:
-      - name: verl_geo3k  # Exact replication of verl's geo3k.py (fixed regex)
+      - name: mmpr_filtered
         weight: 1.0
         kwargs:
-          format_score: 0.1  # Default from verl (accuracy = 1.0 - 0.1 = 0.9)
+          format_weight: 0.1
 
 logger:
   log_dir: "logs"  # Base directory for all logs

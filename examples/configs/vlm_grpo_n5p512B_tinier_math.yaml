@@ -112,8 +112,8 @@ policy:
       gpu_memory_utilization: 0.85
       max_model_len: ${policy.max_total_sequence_length}
       enforce_eager: False
-      limit_mm_per_prompt: {"image": 12}
     vllm_kwargs:
+      limit_mm_per_prompt: {"image": 2}
       max_num_batched_tokens: ${policy.max_total_sequence_length}
       max_num_seqs: 64
     colocated:

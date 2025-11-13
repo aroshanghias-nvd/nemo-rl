@@ -113,8 +113,8 @@ policy:
       max_model_len: ${policy.max_total_sequence_length}
       enforce_eager: False
       skip_tokenizer_init: true
-      limit_mm_per_prompt: {"image": 12}
     vllm_kwargs:
+      limit_mm_per_prompt: {"image": 2}
       max_num_batched_tokens: ${policy.max_total_sequence_length}
       max_num_seqs: 64
     colocated:
