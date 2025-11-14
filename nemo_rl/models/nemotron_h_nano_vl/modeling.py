@@ -153,8 +153,8 @@ class NemotronH_Nano_VL_V2(PreTrainedModel):
                 vit_embeds = vit_embeds.reshape(-1, C)
                 print(f'warning: {e}, inputs_embeds[selected].shape={inputs_embeds[selected].shape}, '
                     f'vit_embeds.shape={vit_embeds.shape}')
-                n_token = selected.sum()
-                inputs_embeds[selected] = inputs_embeds[selected] * 0.0 + vit_embeds[:n_token]
+                n_token = min(int(selected.sum().item()), vit_embeds.size(0))
+                inputs_embeds[selected][:n_token] = inputs_embeds[selected][:n_token] * 0.0 + vit_embeds[:n_token]
 
             del vit_embeds
 
