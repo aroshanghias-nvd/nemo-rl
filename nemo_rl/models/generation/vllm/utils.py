@@ -13,6 +13,7 @@
 # limitations under the License.
 
 from typing import Any, Optional
+from PIL import Image
 
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 from nemo_rl.models.generation.interfaces import GenerationDatumSpec
@@ -67,12 +68,13 @@ def format_prompt_for_vllm_generation(
             prompt_dict = {"prompt": msg}
             # add additional data if present
             images = data.get("vllm_images", None)
-            if images is None or len(images[i]) == 0:
+            if images is None or len(images[i]) == 0 or images[i][0] == "__noimage__":
                 prompts.append(_get_regular_prompt(i))
                 continue
             else:
+                pil_images = [Image.open(image).convert("RGB") for image in images[i]]
                 prompt_dict["multi_modal_data"] = {
-                    "image": images[i][0] if len(images[i]) == 1 else images[i]
+                    "image": pil_images[0] if len(pil_images) == 1 else pil_images
                 }
             prompts.append(prompt_dict)
     else:

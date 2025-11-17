@@ -14,6 +14,7 @@
 
 import argparse
 import base64
+import io
 import os
 import pprint
 from collections import defaultdict
@@ -141,17 +142,14 @@ def hf_data_processor(
     }
     user_message = {"role": "user", "content": []}
     #
-    images = []
+    image_paths = []
     if isinstance(problem, list):
         for content in problem:
             # for image, video, just append it
             # for text, format the prompt to the problem
-            if content["type"] != "text":
+            if content["type"] == "image":
                 user_message["content"].append(content)
-                if content["type"] == "image":
-                    images.append(content["image"])
-                else:
-                    raise ValueError(f"Unsupported content type: {content['type']}")
+                image_paths.append(content["image"])
             elif content["type"] == "text":
                 user_message["content"].append(
                     {
@@ -161,12 +159,15 @@ def hf_data_processor(
                         else content["text"],
                     }
                 )
-    else:
+            else:
+                raise ValueError(f"Unsupported content type: {content['type']}")
+    elif isinstance(problem, str):
         # conversation consists of a text-only message
-        user_message["content"] = task_data_spec.prompt.format(problem)
-
-    images = [resolve_to_image(image) for image in images]
-
+        user_message["content"] = [
+            {"type": "text", "text": task_data_spec.prompt.format(problem)}
+        ]
+    else:
+        raise ValueError(f"Unsupported problem type: {type(problem)}")
     # get formatted conversation messages
     if hasattr(processor, "conversation_preprocessor"):
         system_message_for_chat_template = processor.conversation_preprocessor(
@@ -194,8 +195,21 @@ def hf_data_processor(
         return_tensors="pt",
         return_dict=True,
     )
+    # load images for processing
+    user_message_with_images = {
+        "role": "user",
+        "content": [
+            {
+                "type": "image",
+                "image": resolve_to_image(content["image"]),
+            }
+            if content["type"] == "image"
+            else content
+            for content in user_message["content"]
+        ],
+    }
     message_both: dict = processor.apply_chat_template(
-        [system_message, user_message],
+        [system_message, user_message_with_images],
         tokenize=True,
         add_generation_prompt=True,
         return_tensors="pt",
@@ -246,7 +260,7 @@ def hf_data_processor(
         # add images for vllm serving
         vllm_kwargs = {
             "vllm_content": string_formatted_dialog,
-            "vllm_images": images,
+            "vllm_images": image_paths,
         }
 
     output: DatumSpec = {
