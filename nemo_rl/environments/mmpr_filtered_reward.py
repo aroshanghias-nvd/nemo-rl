@@ -1,6 +1,7 @@
 import ast
 import logging
 import re
+import warnings
 
 import numpy as np
 from mathruler.grader import grade_answer
@@ -364,8 +365,10 @@ def grade_multiple_choice(gt_answer: str, pred_answer: str) -> float:
 
 def grade_python_list(gt_answer: str, pred_answer: str) -> float:
     try:
-        pred_list = ast.literal_eval(pred_answer)
-        gt_list = ast.literal_eval(gt_answer)
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=SyntaxWarning)
+            pred_list = ast.literal_eval(pred_answer)
+            gt_list = ast.literal_eval(gt_answer)
         correct = sum(pred == gt for pred, gt in zip(pred_list, gt_list))
         return correct / max(len(pred_list), len(gt_list))
     except Exception:
