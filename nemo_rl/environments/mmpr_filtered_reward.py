@@ -380,6 +380,8 @@ def grade_string_match(gt_answer: str, pred_answer: str) -> float:
     gt_answer = gt_answer.lower()
     if _normalize_numbers(pred_answer) == _normalize_numbers(gt_answer):
         return 1.0
+    elif _normalize_latex(pred_answer) == _normalize_latex(gt_answer):
+        return 1.0
     elif _normalize_lists(pred_answer) == _normalize_lists(gt_answer):
         return 1.0
     elif _normalize_states(pred_answer) == _normalize_states(gt_answer):
@@ -401,6 +403,49 @@ def _normalize_lists(text: str) -> str:
     if len(text) < 0.9 * orig_len:
         return text
     text = " ".join(text.split())
+    return text
+
+
+def _normalize_latex(text: str) -> str:
+    for cmd in (
+        "\\boxed",
+        "\\text",
+        "\\textbf",
+        "\\textit",
+        "\\texttt",
+        "\\mathrm",
+        "\\mathbf",
+        "\\mathit",
+        "\\mathsf",
+        "\\mathbb",
+        "\\mathcal",
+        "\\emph",
+        "\\url",
+    ):
+        text = _remove_latex_command(cmd, text)
+    for token in ("\\(", "\\)", "\\[", "\\]"):
+        text = text.replace(token, "")
+    text = text.replace("$", "")
+    text = " ".join(text.split())
+    return text
+
+
+def _remove_latex_command(cmd: str, text: str) -> str:
+    assert cmd.startswith("\\"), f"command must start with \\: {cmd}"
+    while cmd + "{" in text:
+        prefix, suffix = text.split(cmd + "{", 1)
+        depth = 1
+        for i, char in enumerate(suffix):
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+            if depth == 0:
+                text = prefix + suffix[:i] + suffix[i+1:]
+                break
+        if depth != 0:
+            # unbalanced braces
+            text = prefix + suffix
     return text
 
 
