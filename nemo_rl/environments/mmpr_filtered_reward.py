@@ -413,11 +413,12 @@ def _normalize_numbers(text: str) -> str:
 
 
 def _normalize_lists(text: str) -> str:
+    orig_text = text
     orig_len = len(text)
     text = text.replace(",", " ").replace(";", " ")
     text = text.replace("and", " ").replace("or", " ")
     if len(text) < 0.9 * orig_len:
-        return text
+        return orig_text
     text = " ".join(text.split())
     return text
 
