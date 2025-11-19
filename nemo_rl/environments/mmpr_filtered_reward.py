@@ -339,12 +339,14 @@ def grade_mmpr(verifier: str, gt_answer: str, pred_answer: str) -> float:
 
 
 def grade_math(gt_answer: str, pred_answer: str) -> float:
+    """Mathematical equality verifier."""
     # heuristics
     gt_answer = gt_answer.replace("°", "^\\circ")
     return float(grade_answer(pred_answer, gt_answer))
 
 
 def grade_multiple_choice(gt_answer: str, pred_answer: str) -> float:
+    """Multiple choice answer verifier."""
     pred_answer = pred_answer.upper()
     gt_answer = "".join(
         ch for ch in gt_answer.upper() if ch in "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -364,6 +366,7 @@ def grade_multiple_choice(gt_answer: str, pred_answer: str) -> float:
 
 
 def grade_python_list(gt_answer: str, pred_answer: str) -> float:
+    """Python list equality verifier."""
     try:
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", category=SyntaxWarning)
@@ -376,9 +379,14 @@ def grade_python_list(gt_answer: str, pred_answer: str) -> float:
 
 
 def grade_string_match(gt_answer: str, pred_answer: str) -> float:
+    """Generic heuristic-based string equality verifier."""
     pred_answer = pred_answer.lower()
     gt_answer = gt_answer.lower()
-    if _normalize_numbers(pred_answer) == _normalize_numbers(gt_answer):
+    if pred_answer == gt_answer:
+        return 1.0
+    elif _normalize_float(pred_answer) == _normalize_float(gt_answer):
+        return 1.0
+    elif _normalize_numbers(pred_answer) == _normalize_numbers(gt_answer):
         return 1.0
     elif _normalize_latex(pred_answer) == _normalize_latex(gt_answer):
         return 1.0
@@ -388,6 +396,14 @@ def grade_string_match(gt_answer: str, pred_answer: str) -> float:
         return 1.0
     else:
         return 0.0
+
+
+def _normalize_float(text: str) -> str:
+    cleaned = text.replace("\\%", "").replace("\\$", "").replace("$", "").strip()
+    try:
+        return str(float(cleaned))
+    except ValueError:
+        return text
 
 
 def _normalize_numbers(text: str) -> str:
