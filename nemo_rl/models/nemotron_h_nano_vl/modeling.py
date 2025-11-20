@@ -146,15 +146,18 @@ class NemotronH_Nano_VL_V2(PreTrainedModel):
             # if torch.distributed.get_rank() == 0:
             #     print(f'dynamic ViT batch size: {vit_batch_size}, images per sample: {vit_batch_size / B}, dynamic token length: {N}')
 
-            vit_embeds = vit_embeds[image_flags == 1]
-            try:
-                inputs_embeds[selected] = inputs_embeds[selected] * 0.0 + vit_embeds.reshape(-1, C)
-            except Exception as e:
-                vit_embeds = vit_embeds.reshape(-1, C)
-                print(f'warning: {e}, inputs_embeds[selected].shape={inputs_embeds[selected].shape}, '
-                    f'vit_embeds.shape={vit_embeds.shape}')
-                n_token = min(int(selected.sum().item()), vit_embeds.size(0))
-                inputs_embeds[selected][:n_token] = inputs_embeds[selected][:n_token] * 0.0 + vit_embeds[:n_token]
+            vit_embeds = vit_embeds[image_flags == 1].reshape(-1, C)
+            num_img_tokens = int(selected.sum().item())
+            # FIXME(jseppanen): defensive merging of vit embeddings to input embeddings is needed
+            # because sometimes the number of image placeholder tokens (num_img_tokens) doesn't
+            # match with the number of image embeddings (vit_embeds.shape[0]) due to an upstream
+            # data processing bug.
+            if num_img_tokens != vit_embeds.shape[0]:
+                warnings.warn(f"The number of image placeholder tokens ({num_img_tokens}) doesn't match the number of vit embeddings ({vit_embeds.shape[0]})")
+            selected_ids = torch.nonzero(selected, as_tuple=False).squeeze(-1)
+            k = min(num_img_tokens, vit_embeds.shape[0])
+            inputs_embeds.index_copy_(0, selected_ids[:k], vit_embeds[:k])
+            inputs_embeds.index_fill_(0, selected_ids[k:], 0.0)
 
             del vit_embeds
 
