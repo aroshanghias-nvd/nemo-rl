@@ -423,7 +423,7 @@ def main(input_path, output_path, shard_id, num_shards):
         proc, log = launch_vllm_server(port)
         # Qwen3-VL-235B-A22B-Thinking-FP8 takes ~10 mins to start
         wait_for_port("localhost", port, timeout=1200, proc=proc)
-        client = openai.OpenAI(api_key="dummy", base_url=f"http://localhost:{port}/v1", timeout=300)
+        client = openai.OpenAI(api_key="dummy", base_url=f"http://localhost:{port}/v1")  #, timeout=600)
         run_inference_over_shard(client, input_path, output_path, shard_id, num_shards)
     finally:
         if proc is not None:
