@@ -1,0 +1,28 @@
+#!/bin/bash
+#SBATCH --array=0-29
+#SBATCH --nodes=1
+#SBATCH --gres=gpu:4
+#SBATCH --partition=batch_block1,batch_short,batch_singlenode
+#SBATCH --account=llmservice_fm_vision
+#SBATCH --time=2:00:00
+
+# 30 jobs x 2 hours x ~2000–4000 samples/hour/job = ~120k samples
+# 120k samples in mmpr-1.2 hard
+
+set -euo pipefail
+
+WORKDIR=/lustre/fsw/portfolios/llmservice/users/jseppanen/dev/nemo-rl-n5p5-mmpr-filtered
+INPUT_PATH=/lustre/fsw/portfolios/llmservice/users/smohsenitahe/forked_rl/nano_v2/RL/MMPR-v1.2
+OUTPUT_PREFIX=$WORKDIR/mmpr_hard_qwen_output
+NUM_SHARDS=30
+
+export HF_HOME=/lustre/fsw/portfolios/llmservice/users/jseppanen/.cache/huggingface
+
+srun \
+  --ntasks-per-node=1 \
+  --nodes=$SLURM_JOB_NUM_NODES \
+  --container-image=/lustre/fsw/portfolios/llmservice/users/jseppanen/sqsh/vllm-c799126-cuda-12.8.1.sqsh \
+  --container-mounts=/lustre:/lustre \
+  --container-workdir=$WORKDIR \
+  --label \
+  bash -lc "source /venv/bin/activate && python scripts/infer_mmpr_hard_qwen.py '$INPUT_PATH' \"${OUTPUT_PREFIX}_\${SLURM_ARRAY_TASK_ID}.jsonl\" --shard-id=\${SLURM_ARRAY_TASK_ID} --num-shards=${NUM_SHARDS}"
