@@ -216,8 +216,6 @@ def read_mmpr_samples(dataset_path, shard_id=0, num_shards=1):
             sample_idx += 1
             if (sample_idx % num_shards) != shard_id:
                 continue
-            if f"mmpr-1.2-{subset_name}" in NEED_FORMATTING_PROMPT:
-                continue
             metadata = {
                 "dataset": f"mmpr-1.2-{subset_name}",
                 "source_path": str(subset_path),
