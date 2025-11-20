@@ -1,20 +1,23 @@
 #!/bin/bash
-#SBATCH --array=0-29
+#SBATCH --array=0-59
 #SBATCH --nodes=1
 #SBATCH --gres=gpu:4
-#SBATCH --partition=batch_block1,batch_short,batch_singlenode
+#SBATCH --partition=batch_block1,batch_singlenode
 #SBATCH --account=llmservice_fm_vision
-#SBATCH --time=2:00:00
+#SBATCH --time=4:00:00
 
-# 30 jobs x 2 hours x ~2000–4000 samples/hour/job = ~120k samples
-# 120k samples in mmpr-1.2 hard
+# 20 jobs x 4 hours x ~2000 samples/hour/job = ~160k samples
+# 100k samples in mmpr-1.2 hard
+
+# 60 jobs x 4 hours x ~130 samples/hour/job = ~30k samples
+# 26k samples in mmpr-1.2 hard, batch 2
 
 set -euo pipefail
 
 WORKDIR=/lustre/fsw/portfolios/llmservice/users/jseppanen/dev/nemo-rl-n5p5-mmpr-filtered
-INPUT_PATH=/lustre/fsw/portfolios/llmservice/users/smohsenitahe/forked_rl/nano_v2/RL/MMPR-v1.2
-OUTPUT_PREFIX=$WORKDIR/mmpr_hard_qwen_output
-NUM_SHARDS=30
+INPUT_PATH=/lustre/fs1/portfolios/llmservice/projects/llmservice_nlp_fm/datasets/eagle-next/image_data/rl_data/mmpr_1_2_verifiable_1120.jsonl
+OUTPUT_PREFIX=$WORKDIR/mmpr_hard_qwen_output2
+NUM_SHARDS=60
 
 export HF_HOME=/lustre/fsw/portfolios/llmservice/users/jseppanen/.cache/huggingface
 
