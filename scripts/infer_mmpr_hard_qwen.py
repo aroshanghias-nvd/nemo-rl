@@ -50,7 +50,7 @@ CONCURRENCY = 2 * BATCH_SIZE
 FORMATTING_PROMPT = "Please answer the question and put the final answer in this format:\n\nAnswer: \\boxed{...}."
 
 # verifiable but missing formatting instructions
-NEED_FORMATTING_PROMPT = """
+APPEND_FORMATTING_PROMPT = """
 mmpr-1.2-ai2d_train_12k_en_20240410_extracted_prefix_pair_sr0.0_with_image
 mmpr-1.2-ai2d_train_12k_en_20240410_extracted_prefix_pair_sr0.5_with_image
 mmpr-1.2-ai2d_train_12k_en_20240410_extracted_prefix_pair_sr0.5_wo_image
@@ -66,21 +66,26 @@ mmpr-1.2-docvqa_train_56k_en_20240402_extracted_prefix_pair_sr0.5_wo_image
 mmpr-1.2-figureqa_en_20240402_extracted_prefix_pair_sr0.0_with_image
 mmpr-1.2-figureqa_en_20240402_extracted_prefix_pair_sr0.5_with_image
 mmpr-1.2-figureqa_en_20240402_extracted_prefix_pair_sr0.5_wo_image
+mmpr-1.2-geometry3k_en_20240402_extracted_pairs_vqa_direct_rules
 mmpr-1.2-gqa_train_en_20240402_extracted_prefix_pair_sr0.0_with_image
 mmpr-1.2-gqa_train_en_20240402_extracted_prefix_pair_sr0.5_with_image
 mmpr-1.2-gqa_train_en_20240402_extracted_prefix_pair_sr0.5_wo_image
+mmpr-1.2-inat_train2018_merge_en_20240811_sr0.50_wo_image
 mmpr-1.2-infographics_20240403_qa_20240407_v2_extracted_prefix_pair_sr0.0_with_image
 mmpr-1.2-infographics_20240403_qa_20240407_v2_extracted_prefix_pair_sr0.5_with_image
 mmpr-1.2-infographics_20240403_qa_20240407_v2_extracted_prefix_pair_sr0.5_wo_image
+mmpr-1.2-m3cot_train_extracted_pairs_vqa_direct_rules
 mmpr-1.2-m3cot_train_extracted_prefix_pair_sr0.0_with_image
 mmpr-1.2-m3cot_train_extracted_prefix_pair_sr0.5_with_image
 mmpr-1.2-m3cot_train_extracted_prefix_pair_sr0.5_wo_image
 mmpr-1.2-mapqa_suv_en_20240402_extracted_prefix_pair_sr0.0_with_image
 mmpr-1.2-mapqa_suv_en_20240402_extracted_prefix_pair_sr0.5_with_image
 mmpr-1.2-mapqa_suv_en_20240402_extracted_prefix_pair_sr0.5_wo_image
+mmpr-1.2-mavis_function_abs_pairs_vqa_direct_rules
 mmpr-1.2-okvqa_train_9k_en_20240402_extracted_prefix_pair_sr0.0_with_image
 mmpr-1.2-okvqa_train_9k_en_20240402_extracted_prefix_pair_sr0.5_with_image
 mmpr-1.2-okvqa_train_9k_en_20240402_extracted_prefix_pair_sr0.5_wo_image
+mmpr-1.2-scienceqa_multi_choice_en_20240402_extracted_pairs_vqa_direct_rules
 mmpr-1.2-scienceqa_multi_choice_en_20240402_extracted_prefix_pair_sr0.0_with_image
 mmpr-1.2-scienceqa_multi_choice_en_20240402_extracted_prefix_pair_sr0.5_with_image
 mmpr-1.2-scienceqa_multi_choice_en_20240402_extracted_prefix_pair_sr0.5_wo_image
@@ -122,21 +127,12 @@ mmpr-1.2-wildvision_gpt4v_to_gpt4o_en_20240903.jsonl_extracted_sr0.5_wo_image
 
 def unify_answer_format(dataset: str, question: str) -> str:
     # mmpr already has output formatting instructions in some questions, but not all
-    if dataset in NEED_FORMATTING_PROMPT:
+    if dataset in APPEND_FORMATTING_PROMPT:
         question = question + "\n" + FORMATTING_PROMPT
     # unify format to be \boxed{...}
     if "\"Final answer: ..\"" in question:
         question = question.replace("\"Final answer: ..\"", "\"\\boxed{...}\"")
-    assert (
-        "\\boxed{" in question or
-        dataset in [
-            "mmpr-1.2-inat_train2018_merge_en_20240811_sr0.50_wo_image",  # python list
-            "mmpr-1.2-mavis_function_abs_pairs_vqa_direct_rules",
-            "mmpr-1.2-geometry3k_en_20240402_extracted_pairs_vqa_direct_rules",
-            "mmpr-1.2-m3cot_train_extracted_pairs_vqa_direct_rules",
-            "mmpr-1.2-scienceqa_multi_choice_en_20240402_extracted_pairs_vqa_direct_rules",
-        ]
-    ), f"question missing formatting: {question} ({dataset})"
+    assert "\\boxed{" in question, f"question missing formatting: {question} ({dataset})"
     return question
 
 
