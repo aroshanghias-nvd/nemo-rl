@@ -1,12 +1,9 @@
 from typing import Optional
 import json
-import random
 from typing import Any, Optional
 
-from datasets import Dataset, Features, Sequence, Value, Image as ImageFeature
-from PIL import Image
+from datasets import Dataset, Features, Sequence, Value
 
-from nemo_rl.data.datasets.response_datasets.vision_r1 import pil_to_base64
 from nemo_rl.data.interfaces import TaskDataSpec
 
 
@@ -108,14 +105,7 @@ class MmprNanov2FilteredDataset:
                 if not images:
                     # mmpr has also text-only samples, but nemo-rl VLM code path
                     # doesn't support mixed text and image samples
-                    size = (random.randint(32, 512), random.randint(32, 512))
-                    color = (
-                        random.randint(0, 255),
-                        random.randint(0, 255),
-                        random.randint(0, 255),
-                    )
-                    dummy = Image.new("RGB", size, color=color)
-                    images.append(dummy)
+                    images.append("__noimage__")
 
                 question = row["question"].replace("<image>", "").strip()
                 question = unify_answer_format(question)
@@ -131,7 +121,7 @@ class MmprNanov2FilteredDataset:
                 )
         features = Features(
             {
-                "images": Sequence(ImageFeature()),
+                "images": Sequence(Value("string")),
                 "question": Value("string"),
                 "answer": Value("string"),
                 "verifier": Value("string"),
@@ -141,18 +131,11 @@ class MmprNanov2FilteredDataset:
         return Dataset.from_list(rows, features=features)
 
 
-def format_mmpr_nanov2_filtered_dataset(
-    example: dict[str, Any], return_pil: bool = False
-) -> dict[str, Any]:
+def format_mmpr_nanov2_filtered_dataset(example: dict[str, Any]) -> dict[str, Any]:
     """Format MmprNanov2FilteredDataset into an OpenAI-API-like message log."""
     user_content = []
     for image in example["images"]:
-        if not isinstance(image, Image.Image):
-            image = Image.open(image).convert("RGB")
-        user_content.append({
-            "type": "image",
-            "image": pil_to_base64(image) if not return_pil else image,
-        })
+        user_content.append({"type": "image", "image": image})
     user_content.append({
         "type": "text",
         "text": example["question"].replace("<image>", "").strip(),
