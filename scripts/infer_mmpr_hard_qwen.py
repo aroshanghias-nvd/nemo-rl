@@ -45,6 +45,7 @@ BATCH_SIZE = 16
 CONCURRENCY = BATCH_SIZE
 TIMEOUT = 600
 
+
 def detect_mime_type(path):
     """Return a MIME type for an image path."""
     ext = Path(path).suffix.lower()
@@ -68,15 +69,18 @@ def image_to_data_url(path):
 
 def build_messages(question, images=None, reasoning=False):
     """Build OpenAI chat messages with optional images."""
-    messages = [{"role": "system", "content": "/think" if reasoning else "/no_think"}]
+    system_prompt = "/think" if reasoning else "/no_think"
+    content = [{"type": "text", "text": question}]
     if images:
         assert isinstance(images, list), f"images must be a list, got {type(images)}"
-        content = [{"type": "text", "text": question}]
         for image in images:
-            content.append({"type": "image_url", "image_url": {"url": image_to_data_url(image)}})
-        messages.append({"role": "user", "content": content})
-    else:
-        messages.append({"role": "user", "content": question})
+            content.append(
+                {"type": "image_url", "image_url": {"url": image_to_data_url(image)}}
+            )
+    messages = [
+        {"role": "system", "content": [{"type": "text", "text": system_prompt}]},
+        {"role": "user", "content": content},
+    ]
     return messages
 
 
@@ -87,6 +91,7 @@ def launch_vllm_server(port):
         "vllm",
         "serve",
         MODEL,
+        "--chat-template-content-format", "openai",
         "--tensor-parallel-size", "4",
         "--limit-mm-per-prompt.video", "0",
         "--gpu-memory-utilization", "0.9",
@@ -162,8 +167,10 @@ def _infer_one(args):
             return None, 0, 0
         except Exception as e:
             if retry < retries - 1:
-                logging.warning(f"Retry {retry + 1}/{retries}: Inference failed for sample {sample['id']}: {e}")
-                time.sleep(2 ** retry)
+                logging.warning(
+                    f"Retry {retry + 1}/{retries}: Inference failed for sample {sample['id']}: {e}"
+                )
+                time.sleep(2**retry)
                 continue
             logging.exception(f"Error in inference task for sample {sample['id']}")
             raise
@@ -178,7 +185,9 @@ def run_inference_over_shard(client, input_path, output_path, shard_id, num_shar
             sample = json.loads(line)
             if sample["id"] not in HARD_SAMPLE_IDS:
                 continue
-            messages = build_messages(sample["question"], images=sample["images"], reasoning=True)
+            messages = build_messages(
+                sample["question"], images=sample["images"], reasoning=True
+            )
             for _ in range(GENERATIONS_PER_PROMPT):
                 yield client, messages, sample
 
@@ -235,7 +244,9 @@ def show_progress(total):
             tps = sum(token_counts) / (now - start_times[0])
             lat_mean = sum(latencies) / len(latencies)
             lat_max = max(latencies)
-            progress.set_description(f"{qph:.0f} QPH, {tps:.0f} TPS, {lat_mean:.0f}/{lat_max:.0f} s")
+            progress.set_description(
+                f"{qph:.0f} QPH, {tps:.0f} TPS, {lat_mean:.0f}/{lat_max:.0f} s"
+            )
             progress.update()
             start_times.append(now)
 
@@ -269,7 +280,9 @@ def main(input_path, output_path, shard_id, num_shards):
         proc, log = launch_vllm_server(port)
         # Qwen3-VL-235B-A22B-Thinking-FP8 takes ~10 mins to start
         wait_for_port("localhost", port, timeout=1200, proc=proc)
-        client = openai.OpenAI(api_key="dummy", base_url=f"http://localhost:{port}/v1", timeout=TIMEOUT)
+        client = openai.OpenAI(
+            api_key="dummy", base_url=f"http://localhost:{port}/v1", timeout=TIMEOUT
+        )
         run_inference_over_shard(client, input_path, output_path, shard_id, num_shards)
     finally:
         if proc is not None:
