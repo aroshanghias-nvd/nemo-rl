@@ -169,7 +169,7 @@ def prepare_mmpr_samples(args):
                 "answer": answer,
                 "source_path": str(path),
                 "source_index": line_num,
-                "subset_idx": subset_idx,
+                "id": 100_000_000 * (subset_idx + 1) + (line_num + 1),
             }
             samples.append(sample)
     if skip:
@@ -187,17 +187,9 @@ with ProcessPoolExecutor() as executor:
         for sample in shard_samples
     ]
 
-samples = [
-    dict(
-        sample,
-        id=100_000_000 * (sample.pop("subset_idx") + 1) + (idx + 1),
-    )
-    for idx, sample in enumerate(samples)
-]
-
 random.seed(0)
 random.shuffle(samples)
 
-with open("mmpr_1_2_verifiable_1120.jsonl", "w", buffering=1, encoding="utf-8") as f:
+with open("mmpr_1_2_verifiable_1126.jsonl", "w", encoding="utf-8") as f:
     for sample in samples:
         f.write(json.dumps(sample, ensure_ascii=False) + "\n")

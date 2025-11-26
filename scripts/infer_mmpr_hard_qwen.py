@@ -274,6 +274,7 @@ def main(input_path, output_path, shard_id, num_shards):
     task_id = int(os.getenv("SLURM_ARRAY_TASK_ID") or "0")
     port = 18765 + task_id
 
+    logging.basicConfig(level=logging.WARNING)
     proc = None
     log = None
     try:
@@ -284,6 +285,9 @@ def main(input_path, output_path, shard_id, num_shards):
             api_key="dummy", base_url=f"http://localhost:{port}/v1", timeout=TIMEOUT
         )
         run_inference_over_shard(client, input_path, output_path, shard_id, num_shards)
+    except Exception as e:
+        logging.exception(f"Error in main: {e}")
+        raise
     finally:
         if proc is not None:
             try:

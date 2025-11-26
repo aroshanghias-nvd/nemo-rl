@@ -44,8 +44,7 @@ CONCURRENCY = 2 * BATCH_SIZE
 # "Reason and answer the question. Give your final answer between the <answer>...</answer> tags."
 # "Solve the following question step-by-step. Output ONLY the FINAL ANSWER in this format:\n\n\\boxed{your_final_answer_here}"
 # "Please answer the question and put the final answer within \\boxed{...}."
-# PROMPT = "Think step-by-step and write the final answer in this format:\n\nThe answer is \\(...\\)."
-PROMPT = "Think step-by-step and write the final answer in this format:\n\nFinal answer: ..."  # MMPR format
+PROMPT = "Think step-by-step and write the final answer in this format:\n\nThe answer is \\(...\\)."
 
 
 def detect_mime_type(path):
@@ -69,7 +68,7 @@ def image_to_data_url(path):
     return f"data:{mime};base64,{b64}"
 
 
-def read_rl_math_samples(jsonl_path, shard_id=0, num_shards=1):
+def read_samples(jsonl_path, shard_id=0, num_shards=1):
     """Yield (image, question, answer) from a JSONL file."""
     for _, line in read_lines(jsonl_path, shard_id, num_shards):
         row = json.loads(line)
@@ -92,68 +91,6 @@ def read_rl_math_samples(jsonl_path, shard_id=0, num_shards=1):
             "id": sample_id,
         }
         yield images, question, answer, metadata
-
-
-def read_mmpr_samples(dataset_path, shard_id=0, num_shards=1):
-    """Yield (image, question, answer) from MMPR-1.2 dataset directory."""
-    dataset_path = Path(dataset_path)
-    meta = json.loads((dataset_path / "meta.json").read_text(encoding="utf-8"))
-    root = dataset_path.parent
-    sample_idx = 0
-    for subset_idx, (subset_name, subset) in enumerate(meta.items()):
-        if subset_name == "dpo_hallucination":
-            continue
-        skip = 0
-        total = 0
-        subset_path = root / subset["annotation"]
-        for file_idx, line in read_lines(subset_path):
-            total += 1
-            row = json.loads(line)
-            images = row.get("image")
-            if not images:
-                images = []
-            elif not isinstance(images, list):
-                images = [images]
-            images = [root / subset["root"] / i for i in images]
-            for img in images:
-                if not img.exists():
-                    print(f"image not found: {img}")
-                    skip += 1
-                    continue
-            images = [str(img) for img in images]
-            question = row["question"]
-            if "answer" in row:
-                answer = row["answer"]
-            elif "answer_gt" in row:
-                answer = row["answer_gt"]
-            elif "chosen" in row:
-                # some preference data subsets are verifiable
-                if subset_name in [
-                    "inat_train2018_merge_en_20240811_sr0.50_wo_image",
-                    "mavis_function_abs_pairs_vqa_direct_rules",
-                    "geometry3k_en_20240402_extracted_pairs_vqa_direct_rules",
-                    "m3cot_train_extracted_pairs_vqa_direct_rules",
-                    "scienceqa_multi_choice_en_20240402_extracted_pairs_vqa_direct_rules",
-                ]:
-                    answer = row["chosen"]
-                else:
-                    skip += 1
-                    continue
-            else:
-                raise ValueError(f"Unknown answer type: {subset_path}:{row}")
-            # shard only after filtering for verifiable samples because some subsets get skipped as a whole
-            sample_idx += 1
-            if (sample_idx % num_shards) != shard_id:
-                continue
-            metadata = {
-                "dataset": f"mmpr-1.2-{subset_name}",
-                "source_path": str(subset_path),
-                "source_index": file_idx,
-                "id": 100_000_000 * (subset_idx + 1) + sample_idx,
-            }
-            yield images, question, answer, metadata
-        if skip:
-            print(f"skipped {skip}/{total} samples in {subset['annotation']}")
 
 
 def build_messages(question, images=None, reasoning=False):
@@ -267,13 +204,13 @@ def _infer_one(args):
 
 def run_inference_over_shard(client, input_path, output_path, shard_id, num_shards):
     """Run inference concurrently over one shard and write JSONL outputs."""
-    reader = read_mmpr_samples  # read_rl_math_samples
 
     def job_iter():
         """Yield (messages, sample) for each generation task."""
-        for images, question, answer, metadata in reader(input_path, shard_id, num_shards):
-            # mmpr already has output formatting instructions in each question
-            # question = question + "\n" + PROMPT
+        for images, question, answer, metadata in read_samples(
+            input_path, shard_id, num_shards
+        ):
+            question = question + "\n" + PROMPT
             messages = build_messages(question, images=images, reasoning=True)
             sample = {
                 "images": images,
@@ -284,8 +221,7 @@ def run_inference_over_shard(client, input_path, output_path, shard_id, num_shar
             for _ in range(GENERATIONS_PER_PROMPT):
                 yield client, messages, sample
 
-    # total_samples = sum(1 for _ in reader(input_path, shard_id, num_shards))
-    total_samples = 493392 // num_shards  # mmpr-1.2
+    total_samples = count_samples(input_path, shard_id, num_shards)
     with open(output_path, "w", buffering=1, encoding="utf-8") as f:
         with ThreadPoolExecutor(max_workers=CONCURRENCY) as executor:
             with show_progress(GENERATIONS_PER_PROMPT * total_samples) as progress:
@@ -329,6 +265,11 @@ def read_lines(path, shard_id=0, num_shards=1):
             if (sample_idx % num_shards) != shard_id:
                 continue
             yield sample_idx, line
+
+
+def count_samples(path, shard_id=0, num_shards=1):
+    """Return number of non-empty lines in a JSONL file."""
+    return sum(1 for _ in read_lines(path, shard_id, num_shards))
 
 
 @click.command()
