@@ -23,14 +23,14 @@ import click
 import openai
 from tqdm import tqdm
 
-INPUT_PATH = "/lustre/fs1/portfolios/llmservice/projects/llmservice_nlp_fm/datasets/eagle-next/image_data/rl_data/mmpr_1_2_verifiable_1120.jsonl"
+INPUT_PATH = "/lustre/fs1/portfolios/llmservice/projects/llmservice_nlp_fm/datasets/eagle-next/image_data/rl_data/mmpr_1_2_verifiable_1126.jsonl"
 
 # batch 1 (failed with timeouts)
 # HARD_SAMPLE_IDS = [json.loads(l) for l in open("/lustre/fs1/portfolios/llmservice/projects/llmservice_nlp_fm/datasets/eagle-next/image_data/rl_data/mmpr1.2_nanov2_filtered/mmpr_nanov2_hard_sample_ids_v1.jsonl")]
 # HARD_SAMPLE_IDS = set(s["id"] for s in HARD_SAMPLE_IDS)
 
 # batch 2 (remaining samples from batch 1)
-HARD_SAMPLE_IDS = set(int(l) for l in open("/lustre/fs1/portfolios/llmservice/projects/llmservice_nlp_fm/datasets/eagle-next/image_data/rl_data/mmpr1.2_nanov2_filtered/mmpr_nanov2_hard_sample_ids_2.txt"))
+HARD_SAMPLE_IDS = set(int(l.replace("[", "").replace("]", "")) for l in open("/lustre/fs1/portfolios/llmservice/projects/llmservice_nlp_fm/datasets/eagle-next/image_data/rl_data/mmpr1.2_nanov2_filtered/hard_ids2"))
 
 MODEL = "Qwen/Qwen3-VL-235B-A22B-Thinking-FP8"
 GENERATIONS_PER_PROMPT = 1

@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --array=0-59
+#SBATCH --array=0-29
 #SBATCH --nodes=1
 #SBATCH --gres=gpu:4
 #SBATCH --partition=batch_block1,batch_singlenode
@@ -9,15 +9,15 @@
 # 20 jobs x 4 hours x ~2000 samples/hour/job = ~160k samples
 # 100k samples in mmpr-1.2 hard
 
-# 60 jobs x 4 hours x ~130 samples/hour/job = ~30k samples
-# 26k samples in mmpr-1.2 hard, batch 2
+# 30 jobs x 4 hours x ~1000 samples/hour/job = ~120k samples
+# 97k samples in mmpr-1.2 hard, batch 3
 
 set -euo pipefail
 
 WORKDIR=/lustre/fsw/portfolios/llmservice/users/jseppanen/dev/nemo-rl-n5p5-mmpr-filtered
-INPUT_PATH=/lustre/fs1/portfolios/llmservice/projects/llmservice_nlp_fm/datasets/eagle-next/image_data/rl_data/mmpr_1_2_verifiable_1120.jsonl
-OUTPUT_PREFIX=$WORKDIR/mmpr_hard_qwen_output2
-NUM_SHARDS=60
+INPUT_PATH=/lustre/fs1/portfolios/llmservice/projects/llmservice_nlp_fm/datasets/eagle-next/image_data/rl_data/mmpr_1_2_verifiable_1126.jsonl
+OUTPUT_PREFIX=$WORKDIR/mmpr_hard_qwen_output4
+NUM_SHARDS=30
 
 export HF_HOME=/lustre/fsw/portfolios/llmservice/users/jseppanen/.cache/huggingface
 
