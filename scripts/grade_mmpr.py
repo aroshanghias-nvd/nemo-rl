@@ -1,5 +1,6 @@
 # srun -A llmservice_fm_vision -p cpu_interactive -t 4:00:00 --cpus-per-task=96 --mem=165G --exclusive --pty bash -l
-# uvx --with mathruler --with sympy --with pylatexenc --with tqdm python scripts/grade_mmpr.py >mmpr_grading.jsonl
+# uvx --with mathruler --with sympy --with pylatexenc --with tqdm python scripts/grade_mmpr.py >mmpr_nanov2_grading.jsonl
+# uvx --with mathruler --with sympy --with pylatexenc --with tqdm python scripts/grade_mmpr.py >mmpr_hard_qwen_grading.jsonl
 
 import ast
 import json
@@ -12,7 +13,8 @@ from mathruler.grader import extract_boxed_content, grade_answer
 from tqdm import tqdm
 
 
-path_pattern = "/lustre/fs1/portfolios/llmservice/projects/llmservice_nlp_fm/datasets/eagle-next/image_data/rl_data/mmpr1.2_nanov2_filtered/generations/mmpr_output_*.jsonl"
+path_pattern = "/lustre/fs1/portfolios/llmservice/projects/llmservice_nlp_fm/datasets/eagle-next/image_data/rl_data/mmpr1.2_nanov2_filtered/generations/mmpr_*.jsonl"
+# path_pattern = "generations_hard_qwen_postproc.jsonl"
 
 # mmpr-1.2-ai2d_train_12k_en_20240410_extracted_pairs_vqa_correctness_rules
 # mmpr-1.2-ai2d_train_12k_en_20240410_extracted_pairs_vqa_format_rules
@@ -247,6 +249,7 @@ mmpr-1.2-vqav2_en_20240402_int_pairs_vqa_format_rules
 """.strip().split()
 
 MULTIPLE_CHOICE_VERIFIER = """
+mmpr-1.2-geo170k_extracted_pairs_vqa_correctness_rules
 mmpr-1.2-koniq10k_en_20240403_pairs_vqa_correctness_rules
 mmpr-1.2-koniq10k_en_20240403_pairs_vqa_format_rules
 mmpr-1.2-scienceqa_multi_choice_en_20240402_extracted_pairs_vqa_correctness_rules
@@ -267,18 +270,21 @@ def read_jsonls(pattern):
 
 
 def extract_boxed_answer(text: str) -> str:
-    if text.count("\\boxed{") != 1:
+    if "\\boxed{" not in text:
         return ""
+    # take last boxed answer if many
+    text = "\\boxed{" + text.rsplit("\\boxed{", 1)[-1]
     return extract_boxed_content(text)
 
 
 def extract_final_answer(text: str) -> str:
-    matches = list(re.finditer(r"^Final answer: *(.*)\.?$", text, flags=re.MULTILINE))
+    norm_text = text.replace("**", "")
+    matches = list(re.finditer(r"^Final [Aa]nswer: *(.*?)\.?$", norm_text, flags=re.MULTILINE))
     if matches:
         answers = [match.group(1).strip() for match in matches]
         if all(ans == answers[0] for ans in answers):
             return answers[0]
-    return ""
+    return text
 
 
 def extract_python_list(text: str) -> str:
@@ -290,13 +296,48 @@ def extract_python_list(text: str) -> str:
 
 
 def verify_math(pred_answer: str, gt_answer: str) -> float:
-    # heuristics
-    gt_answer = gt_answer.replace("°", "^\\circ")
+    # normalize unicode to latex for mathruler
+    gt_answer = (
+        gt_answer
+        .replace("°", "^\\circ")
+        .replace("²", "^2")
+        .replace("³", "^3")
+        .replace("⁴", "^4")
+        .replace("⁵", "^5")
+        .replace("⁶", "^6")
+        .replace("⁷", "^7")
+        .replace("⁸", "^8")
+        .replace("⁹", "^9")
+        .replace("√", "\\sqrt")
+        .replace("﹣", "-")
+        .replace("﹢", "+")
+        .replace("﹦", "=")
+        .replace("﹤", "<")
+        .replace("﹥", ">")
+        .replace("：", ":")
+        .replace("π", "\\pi")
+    )
+    try:
+        float(pred_answer)
+    except ValueError:
+        pass
+    else:
+        gt_answer = (
+            gt_answer
+            .replace("cm²", "")
+            .replace("cm2", "")
+            .replace("cm", "")
+            .replace("m²", "")
+            .replace("m2", "")
+            .replace("m", "")
+            .replace("kg", "")
+            .replace("克", "")
+        )
     return float(grade_answer(pred_answer, gt_answer))
 
 
 def verify_multiple_choice(pred_answer: str, gt_answer: str) -> float:
-    pred_answer = pred_answer.upper()
+    pred_answer = pred_answer.upper().strip()
     gt_answer = "".join(ch for ch in gt_answer.upper() if ch in "ABCDEFGHIJKLMNOPQRSTUVWXYZ")
     assert len(gt_answer) == 1, f"gt_answer: {gt_answer}"
     if len(pred_answer) > 1:
@@ -320,7 +361,9 @@ def verify_python_list(pred_answer: str, gt_answer: str) -> float:
 def verify_string_match(pred_answer: str, gt_answer: str) -> float:
     pred_answer = pred_answer.lower()
     gt_answer = gt_answer.lower()
-    if _normalize_numbers(pred_answer) == _normalize_numbers(gt_answer):
+    if _normalize_punctuation(pred_answer) == _normalize_punctuation(gt_answer):
+        return 1.0
+    elif _normalize_numbers(pred_answer) == _normalize_numbers(gt_answer):
         return 1.0
     elif _normalize_lists(pred_answer) == _normalize_lists(gt_answer):
         return 1.0
@@ -328,6 +371,11 @@ def verify_string_match(pred_answer: str, gt_answer: str) -> float:
         return 1.0
     else:
         return 0.0
+
+
+def _normalize_punctuation(text: str) -> str:
+    norm_text = text.rstrip(".!?")
+    return norm_text or text
 
 
 def _normalize_numbers(text: str) -> str:
@@ -405,11 +453,14 @@ def process(path):
     rows = []
     for _, _, sample in read_jsonls(path):
         question = sample["question"]
+        gt_answer = sample["answer"]
         if "prediction" not in sample:
             print("missing prediction", sample["source_path"], sample["source_index"], file=sys.stderr)
             continue
         prediction = re.sub(r"<think>.*</think>", "", sample["prediction"], flags=re.DOTALL).strip()
-        if "\\boxed{" in question:
+        if prediction == gt_answer:
+            pred_answer = prediction
+        elif "\\boxed{" in question or "\\boxed{" in prediction:
             pred_answer = extract_boxed_answer(prediction)
         elif "\"Final answer: ..\"" in question:
             pred_answer = extract_final_answer(prediction)
@@ -425,33 +476,27 @@ def process(path):
         else:
             raise ValueError(f"unknown answer format: {sample['dataset']}: {question}")
 
-        gt_answer = sample["answer"]
-        row = {
-            "id": sample["id"],
-            "dataset": sample["dataset"],
-            "truncated": sample["finish_reason"] == "length",
-            "answered": bool(pred_answer),
-        }
+        sample["pred_answer"] = pred_answer
         try:
             if not pred_answer:
-                row["score"] = 0
-                row["verifier"] = "unanswered"
+                sample["score"] = 0
+                sample["verifier"] = "unanswered"
             elif sample["dataset"] in MATH_VERIFIER:
-                row["score"] = verify_math(pred_answer, gt_answer)
-                row["verifier"] = "mathruler"
+                sample["score"] = verify_math(pred_answer, gt_answer)
+                sample["verifier"] = "mathruler"
             elif sample["dataset"] in MULTIPLE_CHOICE_VERIFIER:
-                row["score"] = verify_multiple_choice(pred_answer, gt_answer)
-                row["verifier"] = "multiple-choice"
+                sample["score"] = verify_multiple_choice(pred_answer, gt_answer)
+                sample["verifier"] = "multiple-choice"
             elif sample["dataset"] in PYTHON_LIST_VERIFIER:
-                row["score"] = verify_python_list(pred_answer, gt_answer)
-                row["verifier"] = "python-list"
+                sample["score"] = verify_python_list(pred_answer, gt_answer)
+                sample["verifier"] = "python-list"
             else:
                 # case insensitive string match
-                row["score"] = verify_string_match(pred_answer, gt_answer)
-                row["verifier"] = "string-match"
+                sample["score"] = verify_string_match(pred_answer, gt_answer)
+                sample["verifier"] = "string-match"
         except Exception as e:
             raise ValueError(f"verification failed for {sample['dataset']}: {question} -> {pred_answer} -> {gt_answer}") from e
-        rows.append(row)
+        rows.append(sample)
     return rows
 
 

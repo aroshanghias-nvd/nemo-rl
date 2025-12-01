@@ -340,8 +340,45 @@ def grade_mmpr(verifier: str, gt_answer: str, pred_answer: str) -> float:
 
 def grade_math(gt_answer: str, pred_answer: str) -> float:
     """Mathematical equality verifier."""
-    # heuristics
-    gt_answer = gt_answer.replace("°", "^\\circ")
+    # normalize unicode to latex for mathruler
+    gt_answer = (
+        gt_answer
+        .replace("°", "^\\circ")
+        .replace("²", "^2")
+        .replace("³", "^3")
+        .replace("⁴", "^4")
+        .replace("⁵", "^5")
+        .replace("⁶", "^6")
+        .replace("⁷", "^7")
+        .replace("⁸", "^8")
+        .replace("⁹", "^9")
+        .replace("√", "\\sqrt")
+        .replace("﹣", "-")
+        .replace("﹢", "+")
+        .replace("﹦", "=")
+        .replace("﹤", "<")
+        .replace("﹥", ">")
+        .replace("：", ":")
+        .replace("π", "\\pi")
+    )
+    try:
+        float(pred_answer)
+    except ValueError:
+        pass
+    else:
+        gt_answer = (
+            gt_answer
+            .replace("cm²", "")
+            .replace("cm2", "")
+            .replace("cm", "")
+            .replace("m³", "")
+            .replace("m3", "")
+            .replace("m²", "")
+            .replace("m2", "")
+            .replace("m", "")
+            .replace("kg", "")
+            .replace("克", "")
+        )
     return float(grade_answer(pred_answer, gt_answer))
 
 
