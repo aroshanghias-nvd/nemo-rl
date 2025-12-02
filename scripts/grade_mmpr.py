@@ -279,7 +279,7 @@ def extract_boxed_answer(text: str) -> str:
 
 def extract_final_answer(text: str) -> str:
     norm_text = text.replace("**", "")
-    matches = list(re.finditer(r"^Final [Aa]nswer: *(.*?)\.?$", norm_text, flags=re.MULTILINE))
+    matches = list(re.finditer(r"^(?:Final )?[Aa]nswer: *(.*?)\.?$", norm_text, flags=re.MULTILINE))
     if matches:
         answers = [match.group(1).strip() for match in matches]
         if all(ans == answers[0] for ans in answers):
@@ -457,7 +457,7 @@ def process(path):
         if "prediction" not in sample:
             print("missing prediction", sample["source_path"], sample["source_index"], file=sys.stderr)
             continue
-        prediction = re.sub(r"<think>.*</think>", "", sample["prediction"], flags=re.DOTALL).strip()
+        prediction = re.sub(r"<think>.*?</think>", "", sample["prediction"], flags=re.DOTALL).strip()
         if prediction == gt_answer:
             pred_answer = prediction
         elif "\\boxed{" in question or "\\boxed{" in prediction:
@@ -481,6 +481,16 @@ def process(path):
             if not pred_answer:
                 sample["score"] = 0
                 sample["verifier"] = "unanswered"
+            # some datasets have sometimes multiple choice answers mixed with other answers
+            # - mmpr-1.2-geos_en_20240402_extracted_pairs_vqa_format_rules
+            # - mmpr-1.2-tabmwp_en_20240402_cot_pairs_vqa_correctness_rules
+            elif (
+                len(gt_answer) == 1 and
+                gt_answer[0] in "ABCDEFGHIJKLMNOPQRSTUVWXYZ" and
+                verify_multiple_choice(pred_answer, gt_answer)
+            ):
+                sample["score"] = 1.0
+                sample["verifier"] = "multiple-choice"
             elif sample["dataset"] in MATH_VERIFIER:
                 sample["score"] = verify_math(pred_answer, gt_answer)
                 sample["verifier"] = "mathruler"
