@@ -1,17 +1,17 @@
 # DPO algorithm configuration
 mpo:
   max_num_epochs: 1
-  max_num_steps: 5000
-  val_period: 25
+  max_num_steps: 7000
+  val_period: 100
   val_batches: 32
   val_global_batch_size: 32
   val_micro_batch_size: 1
-  val_at_start: true
+  val_at_start: false
   seed: 42
 
-  reference_policy_kl_penalty: 0.05
+  reference_policy_kl_penalty: 0.1
   preference_average_log_probs: False # whether normalizing log probs according to the sequence length in preference_loss
-  sft_average_log_probs: True # whether normalizing log probs according to the sequence length in sft_loss
+  sft_average_log_probs: False # whether normalizing log probs according to the sequence length in sft_loss
   quality_average_log_probs: False
   reward_shift_momentum: 0.99
   reward_shift: 0.0
@@ -19,9 +19,9 @@ mpo:
   ## TODO(@ashors) support other loss functions
   #preference_loss: dpo # the preference loss, we support dpo, ipo, rpo_sq, rpo_bwd_kl, rpo_fwd_kl
   #gt_reward_scale: 1. # the scale of the rewards in RPO
-  preference_loss_weight: 0.8 # the coefficient of the preference loss
-  sft_loss_weight: 1 # the coefficient of the SFT loss
-  bco_loss_weight: 0.2 # the coefficient of the BCO loss
+  preference_loss_weight: 0.8
+  sft_loss_weight: 1.0
+  bco_loss_weight: 0.2
   
 # Data configuration for MMPR
 data:
@@ -35,14 +35,16 @@ data:
 
 # Policy model configuration - adjust based on your VLM model
 policy:
-  model_name: "/lustre/fsw/portfolios/llmservice/users/smohsenitahe/checkpoint/sft_n5p5_12b_49152_13p51_txt_video_cot_lcb_recovery_0922_iter_0002653_hf/mcore_to_hf"  # Or any VLM model you have access to
+  # model_name: "/lustre/fsw/portfolios/llmservice/users/smohsenitahe/checkpoint/sft_n5p5_12b_49152_13p51_txt_video_cot_lcb_recovery_0922_iter_0002653_hf/mcore_to_hf"
+  # model_name: "/lustre/fs1/portfolios/llmservice/users/jseppanen/checkpoints/sft_n5p5_12b_49152_13p51_txt_video_cot_lcb_recovery_0922_iter_0002653_hf/nemorl"
+  model_name: "/lustre/fs1/portfolios/llmservice/users/jseppanen/checkpoints/sft_n5p5_12b_300k_13p52_cot_ruler_only_from_iter_2400_1011_iter_0000440/nemorl" # GA-v2
   tokenizer:
-    name: "/lustre/fsw/portfolios/llmservice/users/smohsenitahe/checkpoint/sft_n5p5_12b_49152_13p51_txt_video_cot_lcb_recovery_0922_iter_0002653_hf/mcore_to_hf"
+    name: ${policy.model_name}
     chat_template: "{%- set ns = namespace(enable_thinking=true, has_sys_prompt=false) -%}{%- set msg = namespace(content='') -%}{%- for message in messages -%}{%- if message['content'] is string -%}{%- if message['role'] == 'user' or message['role'] == 'system' -%}{%- if '/think' in message['content'] -%}{%- set ns.enable_thinking = true -%}{%- elif '/no_think' in message['content'] -%}{%- set ns.enable_thinking = false -%}{%- endif -%}{%- endif -%}{%- else -%}{%- for content in message['content'] -%}{%- if content['type'] == 'text' -%}{%- if message['role'] == 'user' or message['role'] == 'system' -%}{%- if '/think' in content['text'] -%}{%- set ns.enable_thinking = true -%}{%- elif '/no_think' in content['text'] -%}{%- set ns.enable_thinking = false -%}{%- endif -%}{%- endif -%}{%- endif -%}{%- endfor -%}{%- endif -%}{%- endfor -%}{%- for message in messages %}{%- if message['content'] is string -%}{%- set msg.content = message['content'] -%}{%- else -%}{%- set msg.content = '' -%}{%- for content in message['content'] -%}{%- if content['type'] == 'image' -%}{%- set msg.content = msg.content + '<image>' -%}{%- elif content['type'] == 'video' -%}{%- set msg.content = msg.content + '<video>' -%}{%- elif content['type'] == 'text' -%}{%- set msg.content = msg.content + content['text'] -%}{%- endif -%}{%- endfor -%}{%- endif -%}{%- if message['role'] == 'system' %}{{- '<SPECIAL_10>System\n' + msg.content }}{%- if tools -%}{%- if msg.content != '' -%}{{- '\n\n' -}}{%- endif -%}{{- 'You can use the following tools to assist the user if required:\n<AVAILABLE_TOOLS>[' -}}{%- for tool in tools -%}{{- (tool.function if tool.function is defined else tool) | tojson -}}{{- ', ' if not loop.last else '' -}}{%- endfor -%}{{- ']</AVAILABLE_TOOLS>\n\nIf you decide to call any tool(s), use the following format:\n<TOOLCALL>[{{\"name\": \"tool_name1\", \"arguments\": \"tool_args1\"}}, {{\"name\": \"tool_name2\", \"arguments\": \"tool_args2\"}}]</TOOLCALL>\n\nThe user will execute tool-calls and return responses from tool(s) in this format:\n<TOOL_RESPONSE>[{{\"response\": \"tool_response1\"}}, {{\"response\": \"tool_response2\"}}]</TOOL_RESPONSE>\n\nBased on the tool responses, you can call additional tools if needed, correct tool calls if any errors are found, or just respond to the user.' -}}{%- endif -%}{{- '\n' -}}{%- elif message['role'] == 'user' %}{{- '<SPECIAL_11>User\n' + msg.content + '\n' }}{%- elif message['role'] == 'tool' %}{%- if loop.first or (messages[loop.index0 - 1].role != 'tool') -%}{{- '<SPECIAL_11>User\n' + '<TOOL_RESPONSE>[' }}{%- endif -%}{{- msg.content -}}{{- ', ' if not loop.last and (messages[loop.index0 + 1].role == 'tool') else '' -}}{%- if loop.last or (messages[loop.index0 + 1].role != 'tool') -%}{{- ']</TOOL_RESPONSE>\n' -}}{%- endif -%}{%- elif message['role'] == 'assistant' %}{%- if '</think>' in msg.content %}{%- set msg.content = msg.content %}{%- endif %}{{- '<SPECIAL_11>Assistant\n' + msg.content.strip() }}{%- if message.tool_calls -%}{%- if msg.content.strip() != '' -%}{{- '\n\n' -}}{%- endif -%}{{- '<TOOLCALL>[' -}}{%- for call in message.tool_calls -%}{%- set fn = call.function if call.function is defined else call -%}{{- '{\"name\": \"' + fn.name + '\", \"arguments\": ' -}}{%- if fn.arguments is string -%}{{- fn.arguments -}}{%- else -%}{{- fn.arguments | tojson -}}{%- endif -%}{{- '}' + (', ' if not loop.last else '') -}}{%- endfor -%}{{- ']</TOOLCALL>' -}}{%- endif -%}{{- '\n<SPECIAL_12>\n' -}}{%- endif %}{%- endfor -%}{%- if add_generation_prompt %}{{- '<SPECIAL_11>Assistant\n' }}{%- if ns.enable_thinking is defined and ns.enable_thinking is false %}{{- '<think></think>' }}{%- else %}{{- '<think>\n' }}{%- endif %}{%- endif %}"
   # number of preference samples per batch
   # each preference sample corresponds to a pair of chosen and rejected responses
   # so the actual batch size processed by the model is train_global_batch_size * 2
-  train_global_batch_size: 128
+  train_global_batch_size: 256
   train_micro_batch_size: 1
 
   ## TODO(@ashors) support
@@ -75,27 +77,26 @@ policy:
   optimizer:
     name: "torch.optim.AdamW"
     kwargs:
-      lr: 5e-6
-      weight_decay: 0.1
-      betas: [0.9, 0.98]
-      eps: 1e-5
+      lr: 2e-7
+      weight_decay: 0.05
+      betas: [0.9, 0.999]
+      eps: 1e-8
       # when using Dtensor, we need to set foreach
       # and fused to False
       foreach: False
       fused: False
-    
+
   scheduler:
     - name: "torch.optim.lr_scheduler.LinearLR"
       kwargs:
-        start_factor: 0.1
+        start_factor: 0.01
         end_factor: 1.0
-        total_iters: 20
-    - name: "torch.optim.lr_scheduler.ConstantLR"
+        total_iters: 200  # about 3%
+    - name: "torch.optim.lr_scheduler.CosineAnnealingLR"
       kwargs:
-        factor: 1.0
-        total_iters: 10000000000
-    - milestones: [20]
-    
+        T_max: 6800
+    - milestones: [200]
+
   ## ignored since enabled=false, but needed for testing purposes
   megatron_cfg:
     enabled: false
@@ -155,26 +156,13 @@ policy:
       average_in_collective: true
       data_parallel_sharding_strategy: "optim_grads_params"
 
-# Training configuration
-training:
-  max_steps: 1000
-  per_device_train_batch_size: 1
-  per_device_eval_batch_size: 1
-  gradient_accumulation_steps: 4 # Adjust based on your GPU memory
-  learning_rate: 5e-7  # Lower LR for VLM fine-tuning
-  lr_scheduler_type: "cosine"
-  warmup_steps: 100
-  weight_decay: 0.1
-  max_grad_norm: 1.0
-  dataloader_num_workers: 0
-  dataloader_pin_memory: true
-
 logger:
   log_dir: "logs"  # Base directory for all logs
   wandb_enabled: true # Make sure you do a ``wandb login [Your API key]'' before running
 
   tensorboard_enabled: false
   mlflow_enabled: false  # Disable MLflow logging
+  swanlab_enabled: false # Disable SwanLab logging
   monitor_gpus: true  # If true, will monitor GPU usage and log to wandb and/or tensorboard
   num_val_samples_to_print: 0 # Number of validation samples to pretty print on terminal
   wandb:
@@ -190,15 +178,15 @@ logger:
     flush_interval: 10  # How often to flush GPU usage metrics to the loggers (in seconds)
 
 cluster:
-  gpus_per_node: 1
+  gpus_per_node: 8
   num_nodes: 1
 
 # Checkpointing configuration
 checkpointing:
   enabled: true
-  checkpoint_dir: "results/mmpr_mpo_nano_GA_w_hallucination_data_itr2"
+  checkpoint_dir: "results/mpo-dev-mmpr"
   metric_name: "val_loss"
   higher_is_better: false
-  keep_top_k: 5
-  save_period: 25
-  checkpoint_must_save_by: null
+  keep_top_k: 50
+  save_period: 100
+  checkpoint_must_save_by: "00:03:45:00"  # assuming 4 hour slurm jobs

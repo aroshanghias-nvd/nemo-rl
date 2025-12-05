@@ -29,7 +29,7 @@ from nemo_rl.algorithms.mpo import MasterConfig, mpo_train, setup
 from nemo_rl.algorithms.utils import get_tokenizer
 from nemo_rl.data import DataConfig
 from nemo_rl.data.datasets import AllTaskProcessedDataset
-from nemo_rl.data.hf_datasets.mmpr import (
+from nemo_rl.data.datasets.response_datasets.mmpr import (
     MMPRDataset,
     format_mmpr_dataset,
 )
@@ -51,6 +51,7 @@ from nemo_rl.distributed.ray_actor_environment_registry import (
 from nemo_rl.distributed.virtual_cluster import init_ray
 from nemo_rl.environments.interfaces import EnvironmentInterface
 from nemo_rl.environments.vlm_environment import VLMEnvironment
+from nemo_rl.models import nemotron_h_nano_vl
 from nemo_rl.models.generation import configure_generation_config
 from nemo_rl.utils.config import load_config, parse_hydra_overrides
 from nemo_rl.utils.logger import get_next_experiment_dir
@@ -164,6 +165,8 @@ def vlm_mpo_preprocessor(
     # Format the data based on task type
     if task_data_spec.task_name == "mmpr":
         datum_dict = format_mmpr_dataset(datum_dict)
+    else:
+        raise ValueError(f"No data processor for task {task_data_spec.task_name}")
 
     assert len(datum_dict["completions"]) == 2, (
         "DPO training supports only two completions"
@@ -226,16 +229,27 @@ def vlm_mpo_preprocessor(
     # Handle sequence length limits
     loss_multiplier = 1.0
     if max(length_chosen, length_rejected) > max_seq_length:
+        print(f"Discarding sample with length {max(length_chosen, length_rejected)} >= {max_seq_length}")
         # Truncate if necessary
         for message in message_log_chosen:
             message["token_ids"] = message["token_ids"][
                 : min(4, max_seq_length // len(message_log_chosen))
             ]
+            # FIXME(jseppanen) hangs in NCCL allgather if images are removed
+            # for key, value in message.items():
+            #     if isinstance(value, PackedTensor):
+            #         message[key] = PackedTensor.empty_like(value)
         for message in message_log_rejected:
             message["token_ids"] = message["token_ids"][
                 : min(4, max_seq_length // len(message_log_rejected))
             ]
+            # FIXME(jseppanen) hangs in NCCL allgather if images are removed
+            # for key, value in message.items():
+            #     if isinstance(value, PackedTensor):
+            #         message[key] = PackedTensor.empty_like(value)
         loss_multiplier = 0.0
+        length_chosen = sum(len(m["token_ids"]) for m in message_log_chosen)
+        length_rejected = sum(len(m["token_ids"]) for m in message_log_rejected)
 
     output = {
         "message_log_chosen": message_log_chosen,
@@ -246,14 +260,6 @@ def vlm_mpo_preprocessor(
         "loss_multiplier": loss_multiplier,
         "idx": idx,
         "task_name": task_data_spec.task_name,
-        # Add multimodal content for VLLM serving
-        "vlm_content_chosen": processor.apply_chat_template(
-            messages_chosen, tokenize=False, add_generation_prompt=False
-        ),
-        "vlm_content_rejected": processor.apply_chat_template(
-            messages_rejected, tokenize=False, add_generation_prompt=False
-        ),
-        "vlm_images": all_images,
     }
     return output
 
@@ -315,6 +321,8 @@ def setup_data(
 
 def main() -> None:
     """Main entry point for VLM DPO training."""
+    nemotron_h_nano_vl.register()
+
     args, overrides = parse_args()
 
     if not args.config:

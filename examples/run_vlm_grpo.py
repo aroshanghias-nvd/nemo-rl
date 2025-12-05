@@ -255,6 +255,7 @@ def hf_data_processor(
                 if isinstance(value, PackedTensor):
                     chat_message[key] = PackedTensor.empty_like(value)
         loss_multiplier = 0.0
+        length = sum(len(m["token_ids"]) for m in message_log)
     else:
         # get the prompt content! (use this for vllm-backend that needs formatted dialog and list of images) for the entire conversation
         # add images for vllm serving
