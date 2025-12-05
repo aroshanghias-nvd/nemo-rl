@@ -1,0 +1,27 @@
+#!/bin/bash
+#SBATCH --array=0-14
+#SBATCH --nodes=1
+#SBATCH --gres=gpu:4
+#SBATCH --partition=batch_block1,batch_singlenode
+#SBATCH --account=llmservice_fm_vision
+#SBATCH --time=4:00:00
+
+# 15 jobs x 4 hours x ~1000 samples/hour/job = ~60k samples
+
+set -euo pipefail
+
+WORKDIR=/lustre/fsw/portfolios/llmservice/users/jseppanen/dev/nemo-rl-n5p5-mmpr-filtered
+INPUT_PATH=$WORKDIR/super_clevr_train_shuffled.jsonl
+OUTPUT_PREFIX=$WORKDIR/super_clevr_output
+NUM_SHARDS=15
+
+export HF_HOME=/lustre/fsw/portfolios/llmservice/users/jseppanen/.cache/huggingface
+
+srun \
+  --ntasks-per-node=1 \
+  --nodes=$SLURM_JOB_NUM_NODES \
+  --container-image=/lustre/fsw/portfolios/llmservice/users/jseppanen/sqsh/vllm-c799126-cuda-12.8.1.sqsh \
+  --container-mounts=/lustre:/lustre \
+  --container-workdir=$WORKDIR \
+  --label \
+  bash -lc "source /venv/bin/activate && python scripts/infer_mmpr_hard_qwen.py '$INPUT_PATH' \"${OUTPUT_PREFIX}_\${SLURM_ARRAY_TASK_ID}.jsonl\" --shard-id=\${SLURM_ARRAY_TASK_ID} --num-shards=${NUM_SHARDS}"
