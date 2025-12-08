@@ -11,7 +11,7 @@ mpo:
 
   reference_policy_kl_penalty: 0.1
   preference_average_log_probs: False # whether normalizing log probs according to the sequence length in preference_loss
-  sft_average_log_probs: False # whether normalizing log probs according to the sequence length in sft_loss
+  sft_average_log_probs: True # whether normalizing log probs according to the sequence length in sft_loss
   quality_average_log_probs: False
   reward_shift_momentum: 0.99
   reward_shift: 0.0
@@ -91,11 +91,11 @@ policy:
       kwargs:
         start_factor: 0.01
         end_factor: 1.0
-        total_iters: 200  # about 3%
+        total_iters: 100  # about 3%
     - name: "torch.optim.lr_scheduler.CosineAnnealingLR"
       kwargs:
-        T_max: 6800
-    - milestones: [200]
+        T_max: 3400
+    - milestones: [100]
 
   ## ignored since enabled=false, but needed for testing purposes
   megatron_cfg:
@@ -188,5 +188,5 @@ checkpointing:
   metric_name: "val_loss"
   higher_is_better: false
   keep_top_k: 50
-  save_period: 100
+  save_period: 50
   checkpoint_must_save_by: "00:03:45:00"  # assuming 4 hour slurm jobs
