@@ -35,6 +35,16 @@ BASE_FONT_SIZE = 24
 
 QUESTION = "Look at the 3x3 puzzle on top and the 8 answer options on bottom. Which answer option (A–H) best completes the pattern?"
 
+CONFIGS = [
+    "center_single",
+    "distribute_four",
+    "distribute_nine",
+    "left_center_single_right_center_single",
+    "up_center_single_down_center_single",
+    "in_center_single_out_center_single",
+    "in_distribute_four_out_center_single",
+]
+
 SHAPE_NAMES = ["none", "triangle", "square", "pentagon", "hexagon", "circle"]
 SIZE_NAMES = ["tiny", "small", "medium-small", "medium", "medium-large", "large"]
 # 255, 224, 196, 168, 140, 112, 84, 56, 28, 0
@@ -85,15 +95,20 @@ POSITION_NAMES_2X2_INNER = {
     (0.58, 0.58): "bottom-right",
 }
 
-CONFIGS = [
-    "center_single",
-    "distribute_four",
-    "distribute_nine",
-    "left_center_single_right_center_single",
-    "up_center_single_down_center_single",
-    "in_center_single_out_center_single",
-    "in_distribute_four_out_center_single",
-]
+COMPONENT_DISPLAY_NAMES = {
+    "In": "Inner",
+    "Out": "Outer",
+    "Left": "Left",
+    "Right": "Right",
+    "Up": "Top",
+    "Down": "Bottom",
+}
+
+COMPONENT_INTRO_TEXT = {
+    frozenset({"In", "Out"}): "Actually, it looks like each grid cell has two nested objects, an outer object and an inner object. Let's list both levels.",
+    frozenset({"Left", "Right"}): "Actually, it looks like each grid cell is divided into left and right halves with separate objects. Let's list both sides.",
+    frozenset({"Up", "Down"}): "Actually, it looks like each grid cell is divided into top and bottom halves with separate objects. Let's list both parts.",
+}
 
 
 def parse_rules_from_xml(xml_path: Path) -> dict:
@@ -203,11 +218,9 @@ def format_positions(bboxes: list) -> str:
     if not bboxes:
         return "none"
     names = sorted(set(bbox_to_position_name(b) for b in bboxes))
-    if all(name in ["TL", "TR", "BL", "BR"] for name in names):
-        return "{" + ",".join(names) + "}"
-    elif all(name.isdigit() and 1 <= int(name) <= 9 for name in names):
-        return "{" + ",".join(names) + "}"
-    return "{" + ",".join(names) + "}"
+    if len(names) == 1:
+        return names[0]
+    return "{" + ", ".join(names) + "}"
 
 
 def format_attr_value(attr: str, val) -> str:
@@ -284,19 +297,36 @@ def describe_panel(panel: list[dict]) -> str:
         return describe_entity(panel[0])
     shapes = [SHAPE_NAMES[e["shape"]] for e in panel]
     sizes = [SIZE_NAMES[e["size"]] for e in panel]
-    unique_shapes = set(shapes)
-    unique_sizes = set(sizes)
-    size_str = list(unique_sizes)[0] if len(unique_sizes) == 1 else "mixed-size"
-    if len(unique_shapes) == 1:
-        return f"{len(panel)} {size_str} {list(unique_shapes)[0]}s"
-    shape_counts = {}
-    for s in shapes:
-        shape_counts[s] = shape_counts.get(s, 0) + 1
-    shape_parts = [
-        f"{cnt} {shp}s" if cnt > 1 else f"1 {shp}"
-        for shp, cnt in sorted(shape_counts.items())
-    ]
-    return f"{len(panel)} {size_str} objects: " + ", ".join(shape_parts)
+    colors = [COLOR_NAMES[e["color"]] for e in panel]
+    single_shape = list(set(shapes))[0] if len(set(shapes)) == 1 else None
+    single_size = list(set(sizes))[0] if len(set(sizes)) == 1 else None
+    single_color = list(set(colors))[0] if len(set(colors)) == 1 else None
+    desc = f"{len(panel)}"
+    if single_size:
+        desc += " " + single_size
+    if single_color:
+        desc += " " + single_color
+    if single_shape:
+        desc += " " + single_shape + "s"
+    else:
+        shape_counts = {}
+        for s in shapes:
+            shape_counts[s] = shape_counts.get(s, 0) + 1
+        shape_parts = [
+            f"{cnt} {shp}s" if cnt > 1 else f"1 {shp}"
+            for shp, cnt in sorted(shape_counts.items())
+        ]
+        desc += " objects: " + ", ".join(shape_parts)
+    if not single_size or not single_color:
+        desc += " (many"
+        if not single_size:
+            desc += " sizes"
+        if not single_size and not single_color:
+            desc += " and"
+        if not single_color:
+            desc += " colors"
+        desc += ")"
+    return desc
 
 
 def get_uniform_value(val_list):
@@ -467,17 +497,33 @@ def generate_gt_think(xml_path: Path, target: int, gt_rules: dict) -> str:
 
     lines.append("First, let me examine the objects in the grid:")
     lines.append("")
+    if multi_component:
+        comp_set = frozenset(component_names)
+        intro_text = COMPONENT_INTRO_TEXT.get(comp_set, "Actually, it looks like each grid cell has multiple components. Let's list them separately.")
+        lines.append(intro_text)
+        lines.append("")
     for row_idx in range(3):
         lines.append(f"Row {row_idx + 1}:")
         for col_idx in range(3):
             idx = row_idx * 3 + col_idx
             if row_idx == 2 and col_idx == 2:
-                lines.append(
-                    f"- Column {col_idx + 1}: ? (this is what we need to find)"
-                )
+                if multi_component:
+                    for comp_name in component_names:
+                        comp_display = COMPONENT_DISPLAY_NAMES.get(comp_name, comp_name)
+                        lines.append(f"- Column {col_idx + 1} {comp_display}: ? (this is what we need to find)")
+                else:
+                    lines.append(
+                        f"- Column {col_idx + 1}: ? (this is what we need to find)"
+                    )
             elif idx < len(puzzle_panels):
                 panel = puzzle_panels[idx]
-                lines.append(f"- Column {col_idx + 1}: {describe_panel(panel)}")
+                if multi_component:
+                    for comp_name in component_names:
+                        comp_entities = [e for e in panel if e.get("component") == comp_name]
+                        comp_display = COMPONENT_DISPLAY_NAMES.get(comp_name, comp_name)
+                        lines.append(f"- Column {col_idx + 1} {comp_display}: {describe_panel(comp_entities)}")
+                else:
+                    lines.append(f"- Column {col_idx + 1}: {describe_panel(panel)}")
             else:
                 lines.append(f"- Column {col_idx + 1}: empty")
     lines.append("")
@@ -503,7 +549,7 @@ def generate_gt_think(xml_path: Path, target: int, gt_rules: dict) -> str:
 
     for comp_name, rules in gt_rules.items():
         if multi_component:
-            comp_prefix = {"In": "Inner", "Out": "Outer"}.get(comp_name, comp_name) + " "
+            comp_prefix = COMPONENT_DISPLAY_NAMES.get(comp_name, comp_name) + " "
         else:
             comp_prefix = ""
 
@@ -571,8 +617,14 @@ def generate_gt_think(xml_path: Path, target: int, gt_rules: dict) -> str:
     for i, answer_panel in enumerate(answer_panels):
         opt_letter = chr(ord("A") + i)
         if answer_panel:
-            desc = describe_panel(answer_panel)
-            lines.append(f"- {opt_letter}: {desc}")
+            if multi_component:
+                for comp_name in component_names:
+                    comp_entities = [e for e in answer_panel if e.get("component") == comp_name]
+                    comp_display = COMPONENT_DISPLAY_NAMES.get(comp_name, comp_name)
+                    lines.append(f"- {opt_letter}: {comp_display}: {describe_panel(comp_entities)}")
+            else:
+                desc = describe_panel(answer_panel)
+                lines.append(f"- {opt_letter}: {desc}")
         else:
             lines.append(f"- {opt_letter}: empty")
 
@@ -613,7 +665,7 @@ def generate_gt_think(xml_path: Path, target: int, gt_rules: dict) -> str:
                     answer_attrs["positions"] = [expected_position]
             target_attrs[comp_name] = answer_attrs
             if multi_component:
-                comp_prefix = {"In": "Inner", "Out": "Outer"}.get(comp_name, comp_name) + " "
+                comp_prefix = COMPONENT_DISPLAY_NAMES.get(comp_name, comp_name) + " "
             else:
                 comp_prefix = ""
             shapes = answer_attrs.get("shapes", [])
@@ -647,18 +699,18 @@ def generate_gt_think(xml_path: Path, target: int, gt_rules: dict) -> str:
                 and any(isinstance(t, int) and t > 0 for t in disp_shapes)
             ):
                 shapes_str = format_attr_value("shape", disp_shapes)
-                lines.append(f"- {comp_prefix}Shape(s): {shapes_str}")
+                lines.append(f"- {comp_prefix}Shape: {shapes_str}")
             if use_size and disp_sizes:
                 sizes_str = format_attr_value("size", disp_sizes)
-                lines.append(f"- {comp_prefix}Size(s): {sizes_str}")
+                lines.append(f"- {comp_prefix}Size: {sizes_str}")
             if use_color and disp_colors:
                 colors_str = format_attr_value("color", disp_colors)
-                lines.append(f"- {comp_prefix}Color(s): {colors_str}")
+                lines.append(f"- {comp_prefix}Color: {colors_str}")
             if use_count and count_val > 0:
-                lines.append(f"- {comp_prefix}Count: {count_val} object(s)")
+                lines.append(f"- {comp_prefix}Count: {count_val} objects")
             if use_position and positions:
                 pos_str = format_positions(positions)
-                lines.append(f"- {comp_prefix}Position(s): {pos_str}")
+                lines.append(f"- {comp_prefix}Position: {pos_str}")
 
     lines.append("")
     lines.append("Now let me check each option against these requirements:")
@@ -729,7 +781,7 @@ def generate_gt_think(xml_path: Path, target: int, gt_rules: dict) -> str:
             act_num = len(actual_entities)
             if exp_num is not None:
                 if act_num != exp_num:
-                    wrong_attrs.append(f"has {act_num} object(s) (not {exp_num})")
+                    wrong_attrs.append(f"has {act_num} object{'' if act_num == 1 else 's'} (not {exp_num})")
                 else:
                     correct_attrs.append("count")
 
@@ -750,7 +802,7 @@ def generate_gt_think(xml_path: Path, target: int, gt_rules: dict) -> str:
                     correct_attrs.append("position")
 
             if multi_component:
-                comp_prefix = {"In": "Inner", "Out": "Outer"}.get(comp_name, comp_name) + " "
+                comp_prefix = COMPONENT_DISPLAY_NAMES.get(comp_name, comp_name) + " "
             else:
                 comp_prefix = ""
             if wrong_attrs:
@@ -877,12 +929,12 @@ def process_npz_file(args):
     images = data["image"]
     target = int(data["target"])
 
-    composite = create_composite_image(images, seed=sample_id)
+    # composite = create_composite_image(images, seed=sample_id)
 
     rel_path = npz_path.relative_to(RAVEN_ROOT)
     image_name = rel_path.with_suffix(".png").as_posix().replace("/", "_")
     image_path = output_image_dir / image_name
-    composite.save(image_path)
+    # composite.save(image_path)
 
     xml_path = npz_path.with_suffix(".xml")
     try:
