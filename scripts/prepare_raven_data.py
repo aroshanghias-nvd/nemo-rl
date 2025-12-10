@@ -70,30 +70,39 @@ RULE_ATTR_MAP = {
 }
 
 POSITION_NAMES_2X2 = {
-    (0.25, 0.25): "top-left",
-    (0.25, 0.75): "top-right",
-    (0.75, 0.25): "bottom-left",
-    (0.75, 0.75): "bottom-right",
+    (0.25, 0.25): "NW",
+    (0.25, 0.75): "NE",
+    (0.75, 0.25): "SW",
+    (0.75, 0.75): "SE",
 }
 
 POSITION_NAMES_3X3 = {
-    (0.16, 0.16): "top-left",
-    (0.16, 0.5): "top",
-    (0.16, 0.83): "top-right",
-    (0.5, 0.16): "left",
+    (0.16, 0.16): "NW",
+    (0.16, 0.5): "N",
+    (0.16, 0.83): "NE",
+    (0.5, 0.16): "W",
     (0.5, 0.5): "center",
-    (0.5, 0.83): "right",
-    (0.83, 0.16): "bottom-left",
-    (0.83, 0.5): "bottom",
-    (0.83, 0.83): "bottom-right",
+    (0.5, 0.83): "E",
+    (0.83, 0.16): "SW",
+    (0.83, 0.5): "S",
+    (0.83, 0.83): "SE",
 }
 
 POSITION_NAMES_2X2_INNER = {
-    (0.42, 0.42): "top-left",
-    (0.42, 0.58): "top-right",
-    (0.58, 0.42): "bottom-left",
-    (0.58, 0.58): "bottom-right",
+    (0.42, 0.42): "NW",
+    (0.42, 0.58): "NE",
+    (0.58, 0.42): "SW",
+    (0.58, 0.58): "SE",
 }
+
+POSITION_NAMES_HALVES = {
+    (0.5, 0.25): "W",
+    (0.5, 0.75): "E",
+    (0.25, 0.5): "N",
+    (0.75, 0.5): "S",
+}
+
+POSITION_ORDER = ["NW", "N", "NE", "W", "center", "E", "SW", "S", "SE"]
 
 COMPONENT_DISPLAY_NAMES = {
     "In": "Inner",
@@ -105,9 +114,15 @@ COMPONENT_DISPLAY_NAMES = {
 }
 
 COMPONENT_INTRO_TEXT = {
-    frozenset({"In", "Out"}): "Actually, it looks like each grid cell has two nested objects, an outer object and an inner object. Let's list both levels.",
-    frozenset({"Left", "Right"}): "Actually, it looks like each grid cell is divided into left and right halves with separate objects. Let's list both sides.",
-    frozenset({"Up", "Down"}): "Actually, it looks like each grid cell is divided into top and bottom halves with separate objects. Let's list both parts.",
+    frozenset(
+        {"In", "Out"}
+    ): "Actually, it looks like each grid cell has two nested objects, an outer object and an inner object. Let's list both levels.",
+    frozenset(
+        {"Left", "Right"}
+    ): "Actually, it looks like each grid cell is divided into left and right halves with separate objects. Let's list both sides.",
+    frozenset(
+        {"Up", "Down"}
+    ): "Actually, it looks like each grid cell is divided into top and bottom halves with separate objects. Let's list both parts.",
 }
 
 
@@ -207,7 +222,12 @@ def bbox_to_position_name(bbox) -> str:
     if not isinstance(bbox, (list, tuple)) or len(bbox) < 2:
         return str(bbox)
     y, x = round(bbox[0], 2), round(bbox[1], 2)
-    for pos_dict in [POSITION_NAMES_2X2, POSITION_NAMES_3X3, POSITION_NAMES_2X2_INNER]:
+    for pos_dict in [
+        POSITION_NAMES_2X2,
+        POSITION_NAMES_3X3,
+        POSITION_NAMES_2X2_INNER,
+        POSITION_NAMES_HALVES,
+    ]:
         for (py, px), name in pos_dict.items():
             if abs(y - py) < 0.05 and abs(x - px) < 0.05:
                 return name
@@ -217,10 +237,14 @@ def bbox_to_position_name(bbox) -> str:
 def format_positions(bboxes: list) -> str:
     if not bboxes:
         return "none"
-    names = sorted(set(bbox_to_position_name(b) for b in bboxes))
+    unique_names = set(bbox_to_position_name(b) for b in bboxes)
+    names = sorted(
+        unique_names,
+        key=lambda x: POSITION_ORDER.index(x) if x in POSITION_ORDER else 999,
+    )
     if len(names) == 1:
         return names[0]
-    return "{" + ", ".join(names) + "}"
+    return "/".join(names)
 
 
 def format_attr_value(attr: str, val) -> str:
@@ -287,7 +311,12 @@ def describe_entity(entity: dict) -> str:
     size_word = SIZE_NAMES[entity["size"]]
     color_word = COLOR_NAMES[entity["color"]]
     shape = SHAPE_NAMES[entity["shape"]]
-    return f"{size_word} {color_word} {shape}"
+    desc = f"{size_word} {color_word} {shape}"
+    bbox = entity.get("bbox")
+    if bbox:
+        pos_name = bbox_to_position_name(bbox)
+        desc += f" at {pos_name}"
+    return desc
 
 
 def describe_panel(panel: list[dict]) -> str:
@@ -298,6 +327,7 @@ def describe_panel(panel: list[dict]) -> str:
     shapes = [SHAPE_NAMES[e["shape"]] for e in panel]
     sizes = [SIZE_NAMES[e["size"]] for e in panel]
     colors = [COLOR_NAMES[e["color"]] for e in panel]
+    bboxes = [e.get("bbox") for e in panel if e.get("bbox")]
     single_shape = list(set(shapes))[0] if len(set(shapes)) == 1 else None
     single_size = list(set(sizes))[0] if len(set(sizes)) == 1 else None
     single_color = list(set(colors))[0] if len(set(colors)) == 1 else None
@@ -326,6 +356,9 @@ def describe_panel(panel: list[dict]) -> str:
         if not single_color:
             desc += " colors"
         desc += ")"
+    if bboxes:
+        pos_str = format_positions(bboxes)
+        desc += f" at {pos_str}"
     return desc
 
 
@@ -339,16 +372,17 @@ def get_uniform_value(val_list):
 
 
 def rule_to_natural(
-    rule_name: str, attr: str, row3_vals: list, row1_vals: list = None
+    rule_name: str, attr: str, row3_vals: list, row1_vals: list = None, gt_value=None
 ) -> str:
     attr_plural = attr + "s"
+    gt_str = format_attr_value(attr, gt_value) if gt_value is not None else "?"
 
     if rule_name == "Constant":
         if attr == "position":
             pos_strs = [format_attr_value("position", v) for v in row3_vals if v]
             if pos_strs and len(set(pos_strs)) == 1:
                 return f"Wait, the positions are constant across each row! The missing cell should have objects at {pos_strs[0]}."
-            return "The positions stay the same pattern within each row."
+            return f"Wait, the positions are constant across each row! The missing cell should have objects at {gt_str}."
         row3_flat = []
         for v in row3_vals or []:
             if v is None:
@@ -376,105 +410,52 @@ def rule_to_natural(
         if observed and len(set(observed)) == 1:
             first_val = format_attr_value(attr, observed[0])
             return f"Wait, the {attr_plural} are the same across columns, so the missing cell should match {first_val}."
-        if observed:
-            first_val = format_attr_value(attr, observed[0])
-            return f"Hmm, {attr_plural} don't seem to follow any pattern."
-        return f"It looks like {attr_plural} stay the same across columns."
+        return f"Hmm, the {attr_plural} don't seem to follow any pattern."
     elif rule_name == "Progression":
         if attr == "position":
             pos_strs = [format_attr_value("position", v) for v in row3_vals if v]
-            return f"I notice the positions shift systematically across columns (progression). Row 3 so far: {' → '.join(pos_strs)} → ?"
+            return f"I notice the positions shift systematically across columns (progression). Row 3 so far: {' → '.join(pos_strs)} → {gt_str}."
         flat_vals = [get_uniform_value(v) for v in row3_vals if v]
         flat_vals = [v for v in flat_vals if v is not None]
         if len(flat_vals) >= 2:
             diff = flat_vals[1] - flat_vals[0]
             if diff > 0:
                 verb = "increase" if attr != "color" else "become darker"
-                return f"This looks like a pattern where {attr_plural} {verb} from left to right."
+                return f"This looks like a pattern where {attr_plural} {verb} from left to right. The missing cell should be {gt_str}."
             elif diff < 0:
                 verb = "decrease" if attr != "color" else "become lighter"
-                return f"This looks like a pattern where {attr_plural} {verb} from left to right."
-        return (
-            f"I notice that {attr_plural} change by a constant amount across columns."
-        )
+                return f"This looks like a pattern where {attr_plural} {verb} from left to right. The missing cell should be {gt_str}."
+        return f"I notice that {attr_plural} change by a constant amount across columns. The missing cell should be {gt_str}."
     elif rule_name == "Arithmetic":
         if attr == "position":
             p1 = format_attr_value("position", row3_vals[0]) if row3_vals else "?"
-            p2 = format_attr_value("position", row3_vals[1]) if len(row3_vals) > 1 else "?"
-            return f"Wait, positions follow an arithmetic rule! Col3 = union or difference of Col1 and Col2. Row 3: {p1} ∪/∖ {p2} = ?"
+            p2 = (
+                format_attr_value("position", row3_vals[1])
+                if len(row3_vals) > 1
+                else "?"
+            )
+            return f"Wait, there is a pattern here! Position in col3 is the combination of col1 = {p1} and col2 = {p2}, so the missing position in col3 = {gt_str}."
         flat_vals = [get_uniform_value(v) for v in row3_vals if v]
         flat_vals = [v for v in flat_vals if v is not None]
         if len(flat_vals) >= 2:
             c1, c2 = flat_vals[0], flat_vals[1]
-            if attr == "color" or attr == "count":
-                add_result = c1 + c2
-                sub_result = c1 - c2
-                add_formula = "col1 + col2"
-                sub_formula = "col1 - col2"
-                add_calc = f"{c1} + {c2}"
-                sub_calc = f"{c1} - {c2}"
-                max_val = 9
-            else:
-                add_result = c1 + c2 + 1
-                sub_result = c1 - c2 - 1
-                add_formula = "col1 + col2 + 1"
-                sub_formula = "col1 - col2 - 1"
-                add_calc = f"{c1} + {c2} + 1"
-                sub_calc = f"{c1} - {c2} - 1"
-                max_val = 5 if attr in ("shape", "size") else 9
             c1_str = format_attr_value(attr, c1)
             c2_str = format_attr_value(attr, c2)
-            if 0 <= sub_result <= max_val and not (0 <= add_result <= max_val):
-                result_str = format_attr_value(attr, sub_result)
-                return f"Wait, there is a pattern here! In each row, {attr_plural} follow col3 = {sub_formula}. For row 3: col1={c1_str}, col2={c2_str}, so col3 = {sub_calc} = {sub_result} ({result_str})."
-            elif 0 <= add_result <= max_val and not (0 <= sub_result <= max_val):
-                result_str = format_attr_value(attr, add_result)
-                return f"Wait, there is a pattern here! In each row, {attr_plural} follow col3 = {add_formula}. For row 3: col1={c1_str}, col2={c2_str}, so col3 = {add_calc} = {add_result} ({result_str})."
-            else:
-                add_str = (
-                    format_attr_value(attr, add_result)
-                    if 0 <= add_result <= max_val
-                    else f"invalid({add_result})"
-                )
-                sub_str = (
-                    format_attr_value(attr, sub_result)
-                    if 0 <= sub_result <= max_val
-                    else f"invalid({sub_result})"
-                )
-                return f"Wait, there is a pattern here! In each row, {attr_plural} follow an arithmetic rule. For row 3: col1={c1_str}, col2={c2_str}. This gives {add_formula}={add_str} or {sub_formula}={sub_str}."
-        return f"Wait, the {attr_plural} in col3 follow an arithmetic pattern with col1 and col2 in each row."
+            return f"Wait, there is a pattern here! In each row, {attr_plural} follow arithmetically from col1 = {c1_str} and col2 = {c2_str}, so the missing {attr} in col3 = {gt_str}."
+        return f"Wait, the {attr_plural} in col3 follow an arithmetic pattern with col1 and col2 in each row. The missing cell should be {gt_str}."
     elif rule_name == "Distribute_Three":
         if attr == "position":
             pos_strs = [format_attr_value("position", v) for v in row3_vals if v]
-            row1_pos_strs = [format_attr_value("position", v) for v in (row1_vals or []) if v]
-            if row1_pos_strs:
-                row1_set = set(row1_pos_strs)
-                row3_set = set(pos_strs)
-                missing = row1_set - row3_set
-                if missing:
-                    return f"Wait, there is a pattern here! Each row has the same 3 positions shuffled. Row 3 has {', '.join(pos_strs)}, so missing is {', '.join(missing)}."
-            return "Wait, there is a pattern here! Each row contains the same three positions shuffled."
+            return f"Wait, there is a pattern here! Each row has the same 3 positions shuffled. Row 3 has {', '.join(pos_strs)}, so missing is {gt_str}."
         row3_flat = [
             get_uniform_value(v) if isinstance(v, list) else v for v in row3_vals if v
         ]
         row3_flat = [v for v in row3_flat if v is not None]
-        if row1_vals:
-            row1_flat = [
-                get_uniform_value(v) if isinstance(v, list) else v
-                for v in row1_vals
-                if v
-            ]
-            row1_flat = [v for v in row1_flat if v is not None]
-            full_set = set(row1_flat)
-            row3_set = set(row3_flat)
-            missing_vals = full_set - row3_set
-            if missing_vals:
-                missing = list(missing_vals)[0]
-                if attr == "count":
-                    return f"Wait, the {attr_plural} follow a pattern! Each row contains the same three {attr_plural} shuffled. Row 3 has {row3_flat}, so the missing {attr} is {missing}."
-                return f"Wait, the {attr_plural} follow a pattern! Each row contains the same three {attr_plural} shuffled. Row 3 has {[format_attr_value(attr, v) for v in row3_flat]}, so the missing {attr} is {format_attr_value(attr, missing)}."
-        return f"Wait, the {attr_plural} follow a pattern! Each row contains the same three {attr_plural}, shuffled differently."
-    return f"It looks like the {attr_plural} follow the {rule_name.lower()} rule."
+        if attr == "count":
+            return f"Wait, the {attr_plural} follow a pattern! Each row contains the same three {attr_plural} shuffled. Row 3 has {row3_flat}, so the missing {attr} is {gt_str}."
+        return f"Wait, the {attr_plural} follow a pattern! Each row contains the same three {attr_plural} shuffled. Row 3 has {[format_attr_value(attr, v) for v in row3_flat]}, so the missing {attr} is {gt_str}."
+    else:
+        return f"Hmm, the {attr_plural} don't seem to follow an obvious pattern."
 
 
 def generate_gt_think(xml_path: Path, target: int, gt_rules: dict) -> str:
@@ -499,7 +480,10 @@ def generate_gt_think(xml_path: Path, target: int, gt_rules: dict) -> str:
     lines.append("")
     if multi_component:
         comp_set = frozenset(component_names)
-        intro_text = COMPONENT_INTRO_TEXT.get(comp_set, "Actually, it looks like each grid cell has multiple components. Let's list them separately.")
+        intro_text = COMPONENT_INTRO_TEXT.get(
+            comp_set,
+            "Actually, it looks like each grid cell has multiple components. Let's list them separately.",
+        )
         lines.append(intro_text)
         lines.append("")
     for row_idx in range(3):
@@ -510,7 +494,9 @@ def generate_gt_think(xml_path: Path, target: int, gt_rules: dict) -> str:
                 if multi_component:
                     for comp_name in component_names:
                         comp_display = COMPONENT_DISPLAY_NAMES.get(comp_name, comp_name)
-                        lines.append(f"- Column {col_idx + 1} {comp_display}: ? (this is what we need to find)")
+                        lines.append(
+                            f"- Column {col_idx + 1} {comp_display}: ? (this is what we need to find)"
+                        )
                 else:
                     lines.append(
                         f"- Column {col_idx + 1}: ? (this is what we need to find)"
@@ -519,9 +505,13 @@ def generate_gt_think(xml_path: Path, target: int, gt_rules: dict) -> str:
                 panel = puzzle_panels[idx]
                 if multi_component:
                     for comp_name in component_names:
-                        comp_entities = [e for e in panel if e.get("component") == comp_name]
+                        comp_entities = [
+                            e for e in panel if e.get("component") == comp_name
+                        ]
                         comp_display = COMPONENT_DISPLAY_NAMES.get(comp_name, comp_name)
-                        lines.append(f"- Column {col_idx + 1} {comp_display}: {describe_panel(comp_entities)}")
+                        lines.append(
+                            f"- Column {col_idx + 1} {comp_display}: {describe_panel(comp_entities)}"
+                        )
                 else:
                     lines.append(f"- Column {col_idx + 1}: {describe_panel(panel)}")
             else:
@@ -530,6 +520,12 @@ def generate_gt_think(xml_path: Path, target: int, gt_rules: dict) -> str:
 
     lines.append("Now let me look for patterns in each attribute:")
     lines.append("")
+
+    gt_answer_attrs = {}
+    for comp_name in gt_rules.keys():
+        gt_answer_attrs[comp_name] = get_answer_attrs(
+            correct_answer, comp_name, multi_component
+        )
 
     attr_observations = {}
     constant_expectations = {}
@@ -547,16 +543,16 @@ def generate_gt_think(xml_path: Path, target: int, gt_rules: dict) -> str:
             row3_vals = extract_row_values(puzzle_panels, 2, attr, comp_filter)[:2]
             attr_observations[(comp_name, attr)] = (row1_vals, row2_vals, row3_vals)
 
-    for comp_name, rules in gt_rules.items():
-        if multi_component:
-            comp_prefix = COMPONENT_DISPLAY_NAMES.get(comp_name, comp_name) + " "
-        else:
-            comp_prefix = ""
-
-        for attr in ["shape", "size", "color", "count", "position"]:
+    for attr in sorted(
+        ["shape", "size", "color", "count", "position"], key=lambda x: random.random()
+    ):
+        for comp_name, rules in gt_rules.items():
             rule_name = rules.get(attr)
-            if not rule_name:
-                continue
+            if multi_component:
+                comp_prefix = COMPONENT_DISPLAY_NAMES.get(comp_name, comp_name) + " "
+            else:
+                comp_prefix = ""
+
             row1_vals, row2_vals, row3_vals = attr_observations.get(
                 (comp_name, attr), ([], [], [])
             )
@@ -583,6 +579,8 @@ def generate_gt_think(xml_path: Path, target: int, gt_rules: dict) -> str:
                     constant_expectations[(comp_name, attr)] = None
                     constant_holds[(comp_name, attr)] = False
                 attr_used[(comp_name, attr)] = constant_holds[(comp_name, attr)]
+            elif rule_name is None:
+                attr_used[(comp_name, attr)] = False
             else:
                 attr_used[(comp_name, attr)] = True
 
@@ -591,12 +589,6 @@ def generate_gt_think(xml_path: Path, target: int, gt_rules: dict) -> str:
             formatted_r3 = [format_attr_value(attr, v) for v in row3_vals]
 
             lines.append(f"**{comp_prefix}{attr.capitalize()}:**")
-
-            def strip_parens(s):
-                s = s.strip()
-                if s.startswith("(") and s.endswith(")"):
-                    return s[1:-1]
-                return s
 
             row1_str = " | ".join(strip_parens(v) for v in formatted_r1)
             row2_str = " | ".join(strip_parens(v) for v in formatted_r2)
@@ -607,11 +599,21 @@ def generate_gt_think(xml_path: Path, target: int, gt_rules: dict) -> str:
             lines.append(f"- Row 3: {row3_str} | ?")
             lines.append("")
 
-            natural_rule = rule_to_natural(rule_name, attr, row3_vals, row1_vals)
+            comp_gt = gt_answer_attrs.get(comp_name, {})
+            if attr == "count":
+                gt_value = comp_gt.get("count")
+            elif attr == "position":
+                gt_value = comp_gt.get("positions")
+            else:
+                vals = comp_gt.get(attr + "s", [])
+                gt_value = get_uniform_value(vals) if vals else None
+            natural_rule = rule_to_natural(
+                rule_name, attr, row3_vals, row1_vals, gt_value
+            )
             lines.append(natural_rule)
             lines.append("")
 
-    lines.append("Let me look at all the answer options:")
+    lines.append("Let's also examine all the answer options:")
     lines.append("")
 
     for i, answer_panel in enumerate(answer_panels):
@@ -619,9 +621,13 @@ def generate_gt_think(xml_path: Path, target: int, gt_rules: dict) -> str:
         if answer_panel:
             if multi_component:
                 for comp_name in component_names:
-                    comp_entities = [e for e in answer_panel if e.get("component") == comp_name]
+                    comp_entities = [
+                        e for e in answer_panel if e.get("component") == comp_name
+                    ]
                     comp_display = COMPONENT_DISPLAY_NAMES.get(comp_name, comp_name)
-                    lines.append(f"- {opt_letter}: {comp_display}: {describe_panel(comp_entities)}")
+                    lines.append(
+                        f"- {opt_letter}: {comp_display}: {describe_panel(comp_entities)}"
+                    )
             else:
                 desc = describe_panel(answer_panel)
                 lines.append(f"- {opt_letter}: {desc}")
@@ -750,9 +756,9 @@ def generate_gt_think(xml_path: Path, target: int, gt_rules: dict) -> str:
             exp_shapes = expected.get("shapes", []) if use_shape else []
             act_shapes = [e["shape"] for e in actual_entities]
             if exp_shapes:
-                if sorted(exp_shapes) != sorted(act_shapes):
+                if set(exp_shapes) != set(act_shapes):
                     wrong_attrs.append(
-                        f"shape is {format_attr_value('shape', act_shapes)} (not {format_attr_value('shape', exp_shapes)})"
+                        f"shape is {format_actual_for_error('shape', act_shapes)} (not {format_attr_value('shape', exp_shapes)})"
                     )
                 else:
                     correct_attrs.append("shape")
@@ -760,9 +766,9 @@ def generate_gt_think(xml_path: Path, target: int, gt_rules: dict) -> str:
             exp_sizes = expected.get("sizes", []) if use_size else []
             act_sizes = [e["size"] for e in actual_entities]
             if exp_sizes:
-                if sorted(exp_sizes) != sorted(act_sizes):
+                if set(exp_sizes) != set(act_sizes):
                     wrong_attrs.append(
-                        f"size is {format_attr_value('size', act_sizes)} (not {format_attr_value('size', exp_sizes)})"
+                        f"size is {format_actual_for_error('size', act_sizes)} (not {format_attr_value('size', exp_sizes)})"
                     )
                 else:
                     correct_attrs.append("size")
@@ -770,9 +776,9 @@ def generate_gt_think(xml_path: Path, target: int, gt_rules: dict) -> str:
             exp_colors = expected.get("colors", []) if use_color else []
             act_colors = [e["color"] for e in actual_entities]
             if exp_colors:
-                if sorted(exp_colors) != sorted(act_colors):
+                if set(exp_colors) != set(act_colors):
                     wrong_attrs.append(
-                        f"color is {format_attr_value('color', act_colors)} (not {format_attr_value('color', exp_colors)})"
+                        f"color is {format_actual_for_error('color', act_colors)} (not {format_attr_value('color', exp_colors)})"
                     )
                 else:
                     correct_attrs.append("color")
@@ -781,7 +787,9 @@ def generate_gt_think(xml_path: Path, target: int, gt_rules: dict) -> str:
             act_num = len(actual_entities)
             if exp_num is not None:
                 if act_num != exp_num:
-                    wrong_attrs.append(f"has {act_num} object{'' if act_num == 1 else 's'} (not {exp_num})")
+                    wrong_attrs.append(
+                        f"has {act_num} object{'' if act_num == 1 else 's'} (not {exp_num})"
+                    )
                 else:
                     correct_attrs.append("count")
 
@@ -797,7 +805,9 @@ def generate_gt_think(xml_path: Path, target: int, gt_rules: dict) -> str:
                     tuple(p) if isinstance(p, list) else p for p in act_positions
                 }
                 if exp_pos_set != act_pos_set:
-                    wrong_attrs.append("wrong positions")
+                    wrong_attrs.append(
+                        f"position is {format_positions(act_positions)} (not {format_positions(exp_positions)})"
+                    )
                 else:
                     correct_attrs.append("position")
 
@@ -806,17 +816,36 @@ def generate_gt_think(xml_path: Path, target: int, gt_rules: dict) -> str:
             else:
                 comp_prefix = ""
             if wrong_attrs:
-                lines.append(f"- {opt_letter}: {comp_prefix}{random.choice(wrong_attrs)}")
+                lines.append(
+                    f"- {opt_letter}: {comp_prefix}{random.choice(wrong_attrs)}"
+                )
             else:
                 lines.append(
                     f"- {opt_letter}: {comp_prefix}{', '.join(correct_attrs)}, all correct!"
                 )
 
     lines.append("")
-    lines.append(f"Therefore, the only answer that matches all the requirements is {answer_letter}.")
+    lines.append(
+        f"Therefore, the only answer that matches all the requirements is {answer_letter}."
+    )
     lines.append("</think>")
 
     return "\n".join(lines)
+
+
+def strip_parens(s):
+    s = s.strip()
+    if s.startswith("(") and s.endswith(")"):
+        return s[1:-1]
+    return s
+
+
+def format_actual_for_error(attr: str, values: list) -> str:
+    if not values:
+        return "empty"
+    if len(set(values)) == 1:
+        return format_attr_value(attr, values[0])
+    return "varying"
 
 
 def create_composite_image(images: np.ndarray, *, seed: int = None) -> Image.Image:
@@ -929,12 +958,12 @@ def process_npz_file(args):
     images = data["image"]
     target = int(data["target"])
 
-    # composite = create_composite_image(images, seed=sample_id)
+    composite = create_composite_image(images, seed=sample_id)
 
     rel_path = npz_path.relative_to(RAVEN_ROOT)
     image_name = rel_path.with_suffix(".png").as_posix().replace("/", "_")
     image_path = output_image_dir / image_name
-    # composite.save(image_path)
+    composite.save(image_path)
 
     xml_path = npz_path.with_suffix(".xml")
     try:
