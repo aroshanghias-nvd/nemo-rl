@@ -1,0 +1,34 @@
+#!/bin/bash
+#SBATCH --array=0-209
+#SBATCH --nodes=1
+#SBATCH --gres=gpu:1
+#SBATCH --partition=batch_block1
+#SBATCH --account=llmservice_fm_vision
+#SBATCH --time=4:00:00
+
+# 10 jobs x 4 hours x ~4000 samples/hour/gpu = ~160k samples
+
+set -euo pipefail
+
+WORKDIR=/lustre/fsw/portfolios/llmservice/users/smohsenitahe/data/puzzle_external
+INPUT_PATH=/lustre/fsw/portfolios/llmservice/users/smohsenitahe/data/puzzle_external/vqa_rl_samples.json
+OUTPUT_PREFIX=$WORKDIR/vqa_rl_samples_output
+NUM_SHARDS=1
+#infer or eval
+MODE="infer"
+export HF_HOME=/lustre/fsw/portfolios/llmservice/users/jseppanen/.cache/huggingface
+for shard_id in $(seq 0 $((NUM_SHARDS-1))); do
+  echo "[INFO] Launching job for shard ${shard_id}/${NUM_SHARDS-1}…"
+  submit_job --gpu 1 --tasks_per_node 1 \
+    --partition=batch_block1,interactive \
+    --account=llmservice_fm_vision \
+    --nodes=1 \
+    -n infer_eval_filter_${shard_id} \
+    --duration=4 \
+    --image=/lustre/fsw/portfolios/llmservice/users/jseppanen/sqsh/vllm-c799126-cuda-12.8.1.sqsh \
+    --mounts=/lustre:/lustre \
+    --logroot=$WORKDIR/logs \
+    --email_mode=never \
+    -c "bash infer_eval_filter.sh $INPUT_PATH $OUTPUT_PREFIX $shard_id $NUM_SHARDS $MODE"
+sleep 10
+done
