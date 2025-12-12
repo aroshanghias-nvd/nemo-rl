@@ -51,6 +51,8 @@ policy:
       lr_warmup_init: 5.0e-08
     distributed_data_parallel_config:
       overlap_grad_reduce: false
+grpo:
+  seq_logprob_error_threshold: 2
 logger:
   wandb_enabled: true
   wandb:
