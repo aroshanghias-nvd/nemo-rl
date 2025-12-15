@@ -169,7 +169,7 @@ def _infer_one(args):
             return result, resp.usage.completion_tokens
         except openai.BadRequestError as e:
             logging.error(f"Bad request, skipping sample {sample['id']}: {e}")
-            return None, 0, 0
+            return None, 0
         except Exception as e:
             if retry < retries - 1:
                 logging.warning(
@@ -178,10 +178,10 @@ def _infer_one(args):
                 time.sleep(2**retry)
                 continue
             logging.exception(f"Error in inference task for sample {sample['id']}")
-            raise
+            return None, 0
 
 
-def run_inference_over_shard(client, input_path, output_path, shard_id, num_shards):
+def run_inference_over_shard(client, input_path, output_path, image_root, shard_id, num_shards):
     """Run inference concurrently over one shard and write JSONL outputs."""
     # Determine chunk boundaries and total lines for progress bar
     total_lines = count_samples(input_path)
@@ -194,12 +194,14 @@ def run_inference_over_shard(client, input_path, output_path, shard_id, num_shar
     def job_iter():
         """Yield (messages, sample) for each generation task."""
         for _, line in read_lines(input_path, chunk_start, chunk_end):
-            #sample = json.loads(line)
-            sample = line
-            sample["image"] = [sample["image"]]
+            if input_path.endswith(".jsonl"):
+                sample = json.loads(line)
+            else:
+                sample = line
+            sample["images"] = [os.path.join(image_root, sample["image"])]
             question = sample["question"] + "\n" + PROMPT
             messages = build_messages(
-                question, images=sample["image"], reasoning=True
+                question, images=sample["images"], reasoning=True
             )
             for _ in range(GENERATIONS_PER_PROMPT):
                 yield client, messages, sample
@@ -322,19 +324,22 @@ def evaluate_filter(input_paths, output_path):
             is_correct = False
         if is_correct:
             correctness[str({"question":sample["question"],
-            "image": tuple(sample["image"]),
+            "images": tuple(sample["images"]),
             "answer": sample["answer"]})] += 1/GENERATIONS_PER_PROMPT
         else:
             correctness[str({"question":sample["question"],
-            "image": tuple(sample["image"]),
+            "images": tuple(sample["images"]),
             "answer": sample["answer"]})] += 0.0
+    samples_distribution = [0 for _ in range(GENERATIONS_PER_PROMPT)]
     with open(output_path, "w") as f:
         for sample, pass_rate in correctness.items():
             sample = eval(sample)
             sample['pass_rate'] = pass_rate
+            samples_distribution[int(pass_rate * GENERATIONS_PER_PROMPT)] += 1
             if pass_rate >= 0.0 and pass_rate <= 0.9:
                 f.write(json.dumps(sample, ensure_ascii=False) + "\n")
     print(f"Total samples : {len(correctness)}")
+    print(f"distribution of samples: {samples_distribution}")
 
 
 def read_jsonls(pattern):
@@ -348,10 +353,11 @@ def read_jsonls(pattern):
 @click.command()
 @click.argument("input_path", type=click.Path(exists=True))
 @click.argument("output_dir", type=click.Path())
+@click.argument("image_root", type=click.Path(exists=True))
 @click.option("--shard-id", type=int, default=0)
 @click.option("--num-shards", type=int, default=1)
 @click.option("--mode", type=str, default="infer")
-def main(input_path, output_dir, shard_id, num_shards, mode):
+def main(input_path, output_dir, image_root, shard_id, num_shards, mode):
     output_path = output_dir + f"_shard_{shard_id}.jsonl"
     if mode == "infer":
         task_id = int(os.getenv("SLURM_ARRAY_TASK_ID") or "0")
@@ -365,7 +371,7 @@ def main(input_path, output_dir, shard_id, num_shards, mode):
             client = openai.OpenAI(
                 api_key="dummy", base_url=f"http://localhost:{port}/v1", timeout=TIMEOUT
             )
-            run_inference_over_shard(client, input_path, output_path, shard_id, num_shards)
+            run_inference_over_shard(client, input_path, output_path, image_root, shard_id, num_shards)
         except Exception as e:
             logging.exception(f"Error in main: {e}")
             raise

@@ -10,14 +10,19 @@
 
 set -euo pipefail
 
-WORKDIR=/lustre/fsw/portfolios/llmservice/users/smohsenitahe/data/puzzle_external
-INPUT_PATH=/lustre/fsw/portfolios/llmservice/users/smohsenitahe/data/puzzle_external/vqa_rl_samples.json
-OUTPUT_PREFIX=$WORKDIR/vqa_rl_samples_output
-NUM_SHARDS=1
+WORKDIR=/lustre/fsw/portfolios/llmservice/users/smohsenitahe/data/progressive_blends/CoSyn-400K
+INPUT_PATH=/lustre/fsw/portfolios/llmservice/users/smohsenitahe/data/CoSyn-400K/cosyn_math_train.jsonl
+OUTPUT_PREFIX=$WORKDIR/cosyn_math_train_output
+IMAGE_ROOT=./
+NUM_SHARDS=30
 #infer or eval
-MODE="infer"
+MODE="eval"
 export HF_HOME=/lustre/fsw/portfolios/llmservice/users/jseppanen/.cache/huggingface
 for shard_id in $(seq 0 $((NUM_SHARDS-1))); do
+  if [ -f ${OUTPUT_PREFIX}_shard${shard_id}_filtered.jsonl ]; then
+    echo "[INFO] Shard ${shard_id} already processed, skipping..."
+    continue
+  fi
   echo "[INFO] Launching job for shard ${shard_id}/${NUM_SHARDS-1}…"
   submit_job --gpu 1 --tasks_per_node 1 \
     --partition=batch_block1,interactive \
@@ -29,6 +34,6 @@ for shard_id in $(seq 0 $((NUM_SHARDS-1))); do
     --mounts=/lustre:/lustre \
     --logroot=$WORKDIR/logs \
     --email_mode=never \
-    -c "bash infer_eval_filter.sh $INPUT_PATH $OUTPUT_PREFIX $shard_id $NUM_SHARDS $MODE"
+    -c "bash infer_eval_filter.sh $INPUT_PATH $OUTPUT_PREFIX $IMAGE_ROOT $shard_id $NUM_SHARDS $MODE"
 sleep 10
 done
