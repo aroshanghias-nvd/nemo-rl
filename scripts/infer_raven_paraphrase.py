@@ -33,8 +33,7 @@ MODEL = "openai/gpt-oss-120b"
 GENERATIONS_PER_PROMPT = 1
 MAX_TOKENS = 16384
 
-# configuration for rich output diversity
-TEMPERATURE = 1.0
+TEMPERATURE = 0.6
 TOP_K = 50
 TOP_P = 0.95
 
@@ -43,40 +42,29 @@ CONCURRENCY = BATCH_SIZE
 TIMEOUT = 600
 
 REPHRASE_PROMPT = """
-You will receive two reasoning traces for the same visual puzzle:
+Here are two reasoning traces for the same visual puzzle:
 
-1. **STYLE**: A natural reasoning trace (may contain errors)
-2. **FACTS**: A synthetically generated reasoning trace with correct observations and logic
+<reference>
+{reference}
+</reference>
 
-Your task: Rewrite the FACTS trace with varied sentence structure inspired by STYLE.
+<prediction>
+{prediction}
+</prediction>
 
-**Preserve from FACTS:**
-- All observations about the image (shapes, colors, positions, counts)
-- The logical reasoning steps and deductions
-- The final answer
+Your task: Edit the PREDICTION to fix any errors, using the REFERENCE as ground truth.
 
-**Borrow from STYLE:**
-- Sentence structure and flow
-- Vocabulary and phrasing choices
-- Level of detail and verbosity
+**What to fix:**
+- Factual errors about the image (wrong colors, shapes, positions, counts)
+- Logical reasoning mistakes
+- Wrong final answer (must match the reference)
 
-**Rules:**
-- Do not take logical errors from STYLE, if they contradict FACTS
-- Keep the same reasoning granularity: don't skip or merge logical steps
-- Keep language clear and efficient
-- Write in current tense, as if talking out loud while thinking
-- The output is longer for difficult puzzles and shorter for easy puzzles, just like the lengths of STYLE and FACTS
-- The final answer must be the same as in FACTS
+**What to preserve:**
+- The prediction's literal text as much as possible
+- Sentence structure and writing style
+- Level of detail (don't add or remove reasoning steps)
 
-<style>
-{style}
-</style>
-
-<facts>
-{facts}
-</facts>
-
-Write your rephrased reasoning enclosed in <combined>...</combined>.
+Write your corrected version within <prediction>...</prediction> tags.
 """.strip()
 
 FINAL_FORMATTING_PROMPT = (
@@ -173,14 +161,6 @@ def wait_for_port(host, port, timeout, proc=None):
 def _process_sample(args):
     client, sample = args
 
-    pred_answer_match = re.search(r"<think>.*</think>.*\\boxed\{([^}]*)\}", sample["prediction"], flags=re.DOTALL)
-    if pred_answer_match:
-        pred_answer = pred_answer_match.group(1).strip()
-        if pred_answer.upper() == sample["answer"].upper():
-            # keep half of the correct real thinking traces (increase diversity and save on compute)
-            if random.random() < 0.5:
-                return sample, 0, 0
-
     natural_think = re.search(r"<think>(.*?)</think>", sample["prediction"], re.DOTALL)
     if not natural_think:
         return None, 0, 0
@@ -189,7 +169,7 @@ def _process_sample(args):
     synthetic_think = sample["gt_think"].replace("<think>", "").replace("</think>", "").strip()
     resp, tokens, latency = _llm_call(
         client,
-        prompt=REPHRASE_PROMPT.format(style=natural_think, facts=synthetic_think),
+        prompt=REPHRASE_PROMPT.format(prediction=natural_think, reference=synthetic_think),
         sample_id=sample["id"],
     )
     if resp is None:
@@ -199,7 +179,7 @@ def _process_sample(args):
         r"<think>(.*?)</think>", "", rephrase_prediction, flags=re.DOTALL
     )
     rephrased_think = re.search(
-        r"<combined>(.*?)</combined>", rephrased, flags=re.DOTALL
+        r"<prediction>(.*?)</prediction>", rephrased, flags=re.DOTALL
     )
     if not rephrased_think:
         return None, 0, 0
@@ -235,7 +215,7 @@ def _llm_call(client, *, prompt=None, images=None, system_prompt=None, sample_id
                 temperature=TEMPERATURE,
                 stream=False,
                 extra_body={
-                    "reasoning_effort": "low",
+                    "reasoning_effort": "medium",
                     "top_k": TOP_K,
                     "top_p": TOP_P,
                 },
@@ -246,6 +226,9 @@ def _llm_call(client, *, prompt=None, images=None, system_prompt=None, sample_id
             pred = resp.choices[0].message.content.strip()
             if "</think>" in pred and "<think>" not in pred:
                 pred = "<think>\n" + pred
+            # gpt-oss
+            if resp.choices[0].message.reasoning_content:
+                pred = f"<think>\n{resp.choices[0].message.reasoning_content}\n</think>\n\n{pred}"
             result = dict(
                 prediction=pred,
                 finish_reason=resp.choices[0].finish_reason,
