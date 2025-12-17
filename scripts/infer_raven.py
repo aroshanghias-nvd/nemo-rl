@@ -24,16 +24,8 @@ import click
 import openai
 from tqdm import tqdm
 
-INPUT_PATH = "/lustre/fs1/portfolios/llmservice/projects/llmservice_nlp_fm/datasets/eagle-next/image_data/rl_data/mmpr_1_2_verifiable_1126.jsonl"
-
-# batch 1 (failed with timeouts)
-# HARD_SAMPLE_IDS = [json.loads(l) for l in open("/lustre/fs1/portfolios/llmservice/projects/llmservice_nlp_fm/datasets/eagle-next/image_data/rl_data/mmpr1.2_nanov2_filtered/mmpr_nanov2_hard_sample_ids_v1.jsonl")]
-# HARD_SAMPLE_IDS = set(s["id"] for s in HARD_SAMPLE_IDS)
-
-# batch 2 (remaining samples from batch 1)
-HARD_SAMPLE_IDS = set(int(l.replace("[", "").replace("]", "")) for l in open("/lustre/fs1/portfolios/llmservice/projects/llmservice_nlp_fm/datasets/eagle-next/image_data/rl_data/mmpr1.2_nanov2_filtered/hard_ids2"))
-
-INPUT_SIZE = len(HARD_SAMPLE_IDS)
+INPUT_PATH = "/lustre/fsw/portfolios/llmservice/projects/llmservice_nlp_fm/datasets/eagle-next/image_data/commercial_sft_data/RAVEN/prepared/raven_train.jsonl"
+INPUT_SIZE = 42000
 
 MODEL = "Qwen/Qwen3-VL-235B-A22B-Thinking-FP8"
 GENERATIONS_PER_PROMPT = 1
@@ -48,8 +40,21 @@ BATCH_SIZE = 16
 CONCURRENCY = BATCH_SIZE
 TIMEOUT = 600
 
-SYSTEM_PROMPT = "/think"
-FORMATTING_PROMPT = "Do not explain your answer but write only the answer label (A, B, ...) in this format:\n\nAnswer: \\boxed{...}."
+SYSTEM_PROMPT = """
+You are a visual reasoning assistant.
+
+**Task**: Solve abstract visual reasoning problems. Spot the patterns underlying the 3x3 grid and find the missing piece.
+
+**Approach**:
+1. Examine each row and column for patterns
+2. Track attributes: number, position, size, color, and shape of objects
+3. Identify rules: constant, progression, arithmetic, or distribution
+4. Apply the rules to predict what belongs in the missing cell
+
+Ground every reasoning step in the image. Be systematic.
+""".strip()
+QWEN_FORMATTING_PROMPT = "Do not explain your answer but write only the answer label (A, B, ...) in this format:\n\nAnswer: \\boxed{...}."
+NORMAL_FORMATTING_PROMPT = "Write the final answer in this format:\n\nAnswer: \\boxed{...}."
 
 
 def detect_mime_type(path):
@@ -73,9 +78,9 @@ def image_to_data_url(path):
     return f"data:{mime};base64,{b64}"
 
 
-def build_messages(question, *, images=None, system_prompt=None):
+def build_messages(prompt, *, images=None, system_prompt=None):
     """Build OpenAI chat messages with optional images."""
-    content = [{"type": "text", "text": question}]
+    content = [{"type": "text", "text": prompt}]
     if images:
         assert isinstance(images, list), f"images must be a list, got {type(images)}"
         for image in images:
@@ -98,10 +103,14 @@ def launch_vllm_server(port):
         "vllm",
         "serve",
         MODEL,
-        "--chat-template-content-format", "openai",
-        "--tensor-parallel-size", "4",
-        "--limit-mm-per-prompt.video", "0",
-        "--gpu-memory-utilization", "0.9",
+        "--chat-template-content-format",
+        "openai",
+        "--tensor-parallel-size",
+        "4",
+        "--limit-mm-per-prompt.video",
+        "0",
+        "--gpu-memory-utilization",
+        "0.9",
         "--max-model-len",
         str(2 * MAX_TOKENS),
         "--max-num-seqs",
@@ -136,9 +145,25 @@ def wait_for_port(host, port, timeout, proc=None):
     raise TimeoutError(f"Port {port} not ready")
 
 
-def _infer_one(args):
+def _process_sample(args):
+    client, sample = args
+    resp, tokens, latency = _llm_call(
+        client,
+        prompt=sample["question"] + "\n" + QWEN_FORMATTING_PROMPT,
+        images=sample["images"],
+        system_prompt=SYSTEM_PROMPT,
+        sample_id=sample["id"],
+    )
+    if resp is None:
+        return None, 0, 0
+    result = {**sample, **resp}
+    result["question"] = result["question"] + "\n" + NORMAL_FORMATTING_PROMPT
+    return result, tokens, latency
+
+
+def _llm_call(client, *, prompt=None, images=None, system_prompt=None, sample_id=None):
     """Execute one completion and return (sample, total_tokens)."""
-    client, messages, sample = args
+    messages = build_messages(prompt, images=images, system_prompt=system_prompt)
     retries = 5
     for retry in range(retries):
         try:
@@ -161,7 +186,6 @@ def _infer_one(args):
             if "</think>" in pred and "<think>" not in pred:
                 pred = "<think>\n" + pred
             result = dict(
-                sample,
                 prediction=pred,
                 finish_reason=resp.choices[0].finish_reason,
                 prompt_tokens=resp.usage.prompt_tokens,
@@ -170,40 +194,40 @@ def _infer_one(args):
             )
             return result, resp.usage.completion_tokens, latency
         except openai.BadRequestError as e:
-            logging.error(f"Bad request, skipping sample {sample['id']}: {e}")
+            logging.error(f"Bad request, skipping sample {sample_id}: {e}")
             return None, 0, 0
         except Exception as e:
             if retry < retries - 1:
                 logging.warning(
-                    f"Retry {retry + 1}/{retries}: Inference failed for sample {sample['id']}: {e}"
+                    f"Retry {retry + 1}/{retries}: Inference failed for sample {sample_id}: {e}"
                 )
                 time.sleep(2**retry)
                 continue
-            logging.exception(f"Error in inference task for sample {sample['id']}")
+            logging.exception(f"Error in inference task for sample {sample_id}")
             raise
 
 
 def run_inference_over_shard(client, input_path, output_path, shard_id, num_shards):
     """Run inference concurrently over one shard and write JSONL outputs."""
 
-    def job_iter():
-        """Yield (messages, sample) for each generation task."""
+    def jobs():
+        """Yield samples for each generation task."""
         for _, line in read_lines(input_path, shard_id, num_shards):
             sample = json.loads(line)
-            if sample["id"] not in HARD_SAMPLE_IDS:
-                continue
-            if FORMATTING_PROMPT:
-                sample["question"] = sample["question"] + "\n" + FORMATTING_PROMPT
-            messages = build_messages(
-                sample["question"], images=sample["images"], system_prompt=SYSTEM_PROMPT,
-            )
+            sample["images"] = [
+                path.replace(
+                    "/lustre/fsw/portfolios/llmservice/users/jseppanen/data/RAVEN/",
+                    "/lustre/fsw/portfolios/llmservice/projects/llmservice_nlp_fm/datasets/eagle-next/image_data/commercial_sft_data/RAVEN/",
+                )
+                for path in sample["images"]
+            ]
             for _ in range(GENERATIONS_PER_PROMPT):
-                yield client, messages, sample
+                yield client, sample
 
     total_samples = INPUT_SIZE // num_shards
     with open(output_path, "w", buffering=1, encoding="utf-8") as f:
         with show_progress(GENERATIONS_PER_PROMPT * total_samples) as progress:
-            for row, output_tokens, latency in concurrent_map(_infer_one, job_iter()):
+            for row, output_tokens, latency in concurrent_map(_process_sample, jobs()):
                 if row is not None:
                     f.write(json.dumps(row, ensure_ascii=False) + "\n")
                     progress.update(output_tokens, latency)
@@ -312,11 +336,11 @@ def vllm_server(port, *, shutdown=True):
 
 # Run inference and start vllm server if not already running:
 #
-#     $ infer_mmpr_hard_qwen.py input.jsonl output_0.jsonl --shard-id=0 --num-shards=10
+#     $ infer_raven.py input.jsonl output_0.jsonl --shard-id=0 --num-shards=10
 #
 # Start vllm server only:
 #
-#     $ infer_mmpr_hard_qwen.py
+#     $ infer_raven.py
 #
 @click.command()
 @click.argument("input_path", type=click.Path(exists=True), default=INPUT_PATH)
@@ -337,7 +361,9 @@ def main(input_path, output_path, shard_id, num_shards):
             client = openai.OpenAI(
                 api_key="dummy", base_url=f"http://localhost:{port}/v1", timeout=TIMEOUT
             )
-            run_inference_over_shard(client, input_path, output_path, shard_id, num_shards)
+            run_inference_over_shard(
+                client, input_path, output_path, shard_id, num_shards
+            )
     except Exception as e:
         logging.exception(f"Error in main: {e}")
         raise

@@ -2,7 +2,7 @@
 srun -p interactive -A llmservice_fm_vision -N 1 --pty \
     --container-image /lustre/fsw/portfolios/llmservice/users/jseppanen/sqsh/vllm-c799126-cuda-12.8.1.sqsh \
     --container-mounts "/lustre:/lustre,/lustre/fsw/portfolios/llmservice/users/jseppanen/dev:/code" \
-    --gpus 4 \
+    --gpus 1 \
     --job-name "nemo-rl-dev:interactive" \
     -t 04:00:00 \
     bash -l
@@ -12,6 +12,8 @@ import json
 import base64
 import logging
 import os
+import random
+import re
 import socket
 import subprocess
 import sys
@@ -24,32 +26,62 @@ import click
 import openai
 from tqdm import tqdm
 
-INPUT_PATH = "/lustre/fs1/portfolios/llmservice/projects/llmservice_nlp_fm/datasets/eagle-next/image_data/rl_data/mmpr_1_2_verifiable_1126.jsonl"
+INPUT_PATH = "/lustre/fs1/portfolios/llmservice/users/jseppanen/dev/nemo-rl-n5p5-mmpr-filtered/raven_output_0.jsonl"
+INPUT_SIZE = 420
 
-# batch 1 (failed with timeouts)
-# HARD_SAMPLE_IDS = [json.loads(l) for l in open("/lustre/fs1/portfolios/llmservice/projects/llmservice_nlp_fm/datasets/eagle-next/image_data/rl_data/mmpr1.2_nanov2_filtered/mmpr_nanov2_hard_sample_ids_v1.jsonl")]
-# HARD_SAMPLE_IDS = set(s["id"] for s in HARD_SAMPLE_IDS)
-
-# batch 2 (remaining samples from batch 1)
-HARD_SAMPLE_IDS = set(int(l.replace("[", "").replace("]", "")) for l in open("/lustre/fs1/portfolios/llmservice/projects/llmservice_nlp_fm/datasets/eagle-next/image_data/rl_data/mmpr1.2_nanov2_filtered/hard_ids2"))
-
-INPUT_SIZE = len(HARD_SAMPLE_IDS)
-
-MODEL = "Qwen/Qwen3-VL-235B-A22B-Thinking-FP8"
+MODEL = "openai/gpt-oss-120b"
 GENERATIONS_PER_PROMPT = 1
 MAX_TOKENS = 16384
-# https://github.com/QwenLM/Qwen3-VL?tab=readme-ov-file#thinking-models
-TEMPERATURE = 0.6
-TOP_K = 20
+
+# configuration for rich output diversity
+TEMPERATURE = 1.0
+TOP_K = 50
 TOP_P = 0.95
 
-# reduce batch size to prevent timeouts for long/slow answers
 BATCH_SIZE = 16
 CONCURRENCY = BATCH_SIZE
 TIMEOUT = 600
 
-SYSTEM_PROMPT = "/think"
-FORMATTING_PROMPT = "Do not explain your answer but write only the answer label (A, B, ...) in this format:\n\nAnswer: \\boxed{...}."
+REPHRASE_PROMPT = """
+You will receive two reasoning traces for the same visual puzzle:
+
+1. **STYLE**: A natural reasoning trace (may contain errors)
+2. **FACTS**: A synthetically generated reasoning trace with correct observations and logic
+
+Your task: Rewrite the FACTS trace with varied sentence structure inspired by STYLE.
+
+**Preserve from FACTS:**
+- All observations about the image (shapes, colors, positions, counts)
+- The logical reasoning steps and deductions
+- The final answer
+
+**Borrow from STYLE:**
+- Sentence structure and flow
+- Vocabulary and phrasing choices
+- Level of detail and verbosity
+
+**Rules:**
+- Do not take logical errors from STYLE, if they contradict FACTS
+- Keep the same reasoning granularity: don't skip or merge logical steps
+- Keep language clear and efficient
+- Write in current tense, as if talking out loud while thinking
+- The output is longer for difficult puzzles and shorter for easy puzzles, just like the lengths of STYLE and FACTS
+- The final answer must be the same as in FACTS
+
+<style>
+{style}
+</style>
+
+<facts>
+{facts}
+</facts>
+
+Write your rephrased reasoning enclosed in <combined>...</combined>.
+""".strip()
+
+FINAL_FORMATTING_PROMPT = (
+    "Write the final answer in this format:\n\nAnswer: \\boxed{...}."
+)
 
 
 def detect_mime_type(path):
@@ -73,9 +105,9 @@ def image_to_data_url(path):
     return f"data:{mime};base64,{b64}"
 
 
-def build_messages(question, *, images=None, system_prompt=None):
+def build_messages(prompt, *, images=None, system_prompt=None):
     """Build OpenAI chat messages with optional images."""
-    content = [{"type": "text", "text": question}]
+    content = [{"type": "text", "text": prompt}]
     if images:
         assert isinstance(images, list), f"images must be a list, got {type(images)}"
         for image in images:
@@ -93,21 +125,23 @@ def build_messages(question, *, images=None, system_prompt=None):
 
 def launch_vllm_server(port):
     """Start one vLLM server on a port."""
-    # https://docs.vllm.ai/projects/recipes/en/latest/Qwen/Qwen3-VL.html#running-qwen3-vl
+    # https://docs.vllm.ai/projects/recipes/en/latest/OpenAI/GPT-OSS.html#recipe-for-nvidia-blackwell-hopper-hardware
     cmd = [
         "vllm",
         "serve",
         MODEL,
-        "--chat-template-content-format", "openai",
-        "--tensor-parallel-size", "4",
-        "--limit-mm-per-prompt.video", "0",
-        "--gpu-memory-utilization", "0.9",
+        "--async-scheduling",
+        "--no-enable-prefix-caching",
+        "--max-cudagraph-capture-size", "2048",
+        "--max-num-batched-tokens", "8192",
+        "--chat-template-content-format",
+        "openai",
+        "--gpu-memory-utilization",
+        "0.9",
         "--max-model-len",
         str(2 * MAX_TOKENS),
         "--max-num-seqs",
         str(BATCH_SIZE),
-        "--max-num-batched-tokens",
-        str(MAX_TOKENS),
         "--port",
         str(port),
     ]
@@ -136,9 +170,60 @@ def wait_for_port(host, port, timeout, proc=None):
     raise TimeoutError(f"Port {port} not ready")
 
 
-def _infer_one(args):
+def _process_sample(args):
+    client, sample = args
+
+    pred_answer_match = re.search(r"<think>.*</think>.*\\boxed\{([^}]*)\}", sample["prediction"], flags=re.DOTALL)
+    if pred_answer_match:
+        pred_answer = pred_answer_match.group(1).strip()
+        if pred_answer.upper() == sample["answer"].upper():
+            # keep half of the correct real thinking traces (increase diversity and save on compute)
+            if random.random() < 0.5:
+                return sample, 0, 0
+
+    natural_think = re.search(r"<think>(.*?)</think>", sample["prediction"], re.DOTALL)
+    if not natural_think:
+        return None, 0, 0
+
+    natural_think = natural_think.group(1).strip()
+    synthetic_think = sample["gt_think"].replace("<think>", "").replace("</think>", "").strip()
+    resp, tokens, latency = _llm_call(
+        client,
+        prompt=REPHRASE_PROMPT.format(style=natural_think, facts=synthetic_think),
+        sample_id=sample["id"],
+    )
+    if resp is None:
+        return None, 0, 0
+    rephrase_prediction = resp["prediction"]
+    rephrased = re.sub(
+        r"<think>(.*?)</think>", "", rephrase_prediction, flags=re.DOTALL
+    )
+    rephrased_think = re.search(
+        r"<combined>(.*?)</combined>", rephrased, flags=re.DOTALL
+    )
+    if not rephrased_think:
+        return None, 0, 0
+    rephrased_think = rephrased_think.group(1).strip()
+
+    prediction = (
+        f"<think>\n{rephrased_think}\n</think>\n\nAnswer: \\boxed{{{sample['answer']}}}"
+    )
+    resp = dict(
+        sample,
+        prediction=prediction,
+        qwen_prediction=sample["prediction"],
+        rephrase_prediction=rephrase_prediction,
+        finish_reason=resp["finish_reason"],
+        prompt_tokens=sample["prompt_tokens"] + resp["prompt_tokens"],
+        completion_tokens=sample["completion_tokens"] + resp["completion_tokens"],
+        total_tokens=sample["total_tokens"] + resp["total_tokens"],
+    )
+    return resp, tokens, latency
+
+
+def _llm_call(client, *, prompt=None, images=None, system_prompt=None, sample_id=None):
     """Execute one completion and return (sample, total_tokens)."""
-    client, messages, sample = args
+    messages = build_messages(prompt, images=images, system_prompt=system_prompt)
     retries = 5
     for retry in range(retries):
         try:
@@ -150,6 +235,7 @@ def _infer_one(args):
                 temperature=TEMPERATURE,
                 stream=False,
                 extra_body={
+                    "reasoning_effort": "low",
                     "top_k": TOP_K,
                     "top_p": TOP_P,
                 },
@@ -161,7 +247,6 @@ def _infer_one(args):
             if "</think>" in pred and "<think>" not in pred:
                 pred = "<think>\n" + pred
             result = dict(
-                sample,
                 prediction=pred,
                 finish_reason=resp.choices[0].finish_reason,
                 prompt_tokens=resp.usage.prompt_tokens,
@@ -170,40 +255,33 @@ def _infer_one(args):
             )
             return result, resp.usage.completion_tokens, latency
         except openai.BadRequestError as e:
-            logging.error(f"Bad request, skipping sample {sample['id']}: {e}")
+            logging.error(f"Bad request, skipping sample {sample_id}: {e}")
             return None, 0, 0
         except Exception as e:
             if retry < retries - 1:
                 logging.warning(
-                    f"Retry {retry + 1}/{retries}: Inference failed for sample {sample['id']}: {e}"
+                    f"Retry {retry + 1}/{retries}: Inference failed for sample {sample_id}: {e}"
                 )
                 time.sleep(2**retry)
                 continue
-            logging.exception(f"Error in inference task for sample {sample['id']}")
+            logging.exception(f"Error in inference task for sample {sample_id}")
             raise
 
 
 def run_inference_over_shard(client, input_path, output_path, shard_id, num_shards):
     """Run inference concurrently over one shard and write JSONL outputs."""
 
-    def job_iter():
-        """Yield (messages, sample) for each generation task."""
+    def jobs():
+        """Yield samples for each generation task."""
         for _, line in read_lines(input_path, shard_id, num_shards):
             sample = json.loads(line)
-            if sample["id"] not in HARD_SAMPLE_IDS:
-                continue
-            if FORMATTING_PROMPT:
-                sample["question"] = sample["question"] + "\n" + FORMATTING_PROMPT
-            messages = build_messages(
-                sample["question"], images=sample["images"], system_prompt=SYSTEM_PROMPT,
-            )
             for _ in range(GENERATIONS_PER_PROMPT):
-                yield client, messages, sample
+                yield client, sample
 
     total_samples = INPUT_SIZE // num_shards
     with open(output_path, "w", buffering=1, encoding="utf-8") as f:
         with show_progress(GENERATIONS_PER_PROMPT * total_samples) as progress:
-            for row, output_tokens, latency in concurrent_map(_infer_one, job_iter()):
+            for row, output_tokens, latency in concurrent_map(_process_sample, jobs()):
                 if row is not None:
                     f.write(json.dumps(row, ensure_ascii=False) + "\n")
                     progress.update(output_tokens, latency)
@@ -312,11 +390,11 @@ def vllm_server(port, *, shutdown=True):
 
 # Run inference and start vllm server if not already running:
 #
-#     $ infer_mmpr_hard_qwen.py input.jsonl output_0.jsonl --shard-id=0 --num-shards=10
+#     $ infer_raven_paraphrase.py input.jsonl output_0.jsonl --shard-id=0 --num-shards=10
 #
 # Start vllm server only:
 #
-#     $ infer_mmpr_hard_qwen.py
+#     $ infer_raven_paraphrase.py
 #
 @click.command()
 @click.argument("input_path", type=click.Path(exists=True), default=INPUT_PATH)
@@ -337,7 +415,9 @@ def main(input_path, output_path, shard_id, num_shards):
             client = openai.OpenAI(
                 api_key="dummy", base_url=f"http://localhost:{port}/v1", timeout=TIMEOUT
             )
-            run_inference_over_shard(client, input_path, output_path, shard_id, num_shards)
+            run_inference_over_shard(
+                client, input_path, output_path, shard_id, num_shards
+            )
     except Exception as e:
         logging.exception(f"Error in main: {e}")
         raise

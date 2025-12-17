@@ -24,19 +24,11 @@ import click
 import openai
 from tqdm import tqdm
 
-INPUT_PATH = "/lustre/fs1/portfolios/llmservice/projects/llmservice_nlp_fm/datasets/eagle-next/image_data/rl_data/mmpr_1_2_verifiable_1126.jsonl"
-
-# batch 1 (failed with timeouts)
-# HARD_SAMPLE_IDS = [json.loads(l) for l in open("/lustre/fs1/portfolios/llmservice/projects/llmservice_nlp_fm/datasets/eagle-next/image_data/rl_data/mmpr1.2_nanov2_filtered/mmpr_nanov2_hard_sample_ids_v1.jsonl")]
-# HARD_SAMPLE_IDS = set(s["id"] for s in HARD_SAMPLE_IDS)
-
-# batch 2 (remaining samples from batch 1)
-HARD_SAMPLE_IDS = set(int(l.replace("[", "").replace("]", "")) for l in open("/lustre/fs1/portfolios/llmservice/projects/llmservice_nlp_fm/datasets/eagle-next/image_data/rl_data/mmpr1.2_nanov2_filtered/hard_ids2"))
-
-INPUT_SIZE = len(HARD_SAMPLE_IDS)
+INPUT_PATH = "/lustre/fs1/portfolios/llmservice/users/jseppanen/data/geometry3k/geometry3k_train.jsonl"
+INPUT_SIZE = 2100
 
 MODEL = "Qwen/Qwen3-VL-235B-A22B-Thinking-FP8"
-GENERATIONS_PER_PROMPT = 1
+GENERATIONS_PER_PROMPT = 2
 MAX_TOKENS = 16384
 # https://github.com/QwenLM/Qwen3-VL?tab=readme-ov-file#thinking-models
 TEMPERATURE = 0.6
@@ -48,7 +40,20 @@ BATCH_SIZE = 16
 CONCURRENCY = BATCH_SIZE
 TIMEOUT = 600
 
-SYSTEM_PROMPT = "/think"
+SYSTEM_PROMPT = """
+You are a mathematical geometry problem assistant.
+
+**Task**: Solve high-school geometry problems using the provided diagram and problem statement.
+
+**Approach**:
+1. Carefully examine the diagram to identify all geometric figures, points, lines, and angles
+2. Note all given measurements, labels, and relationships
+3. Apply relevant geometry theorems and properties (e.g., Pythagorean theorem, properties of triangles, circles, parallel lines, congruence, similarity)
+4. Set up equations based on the relationships and solve step by step
+5. Verify your answer makes sense geometrically
+
+Show your reasoning clearly and justify each step with the theorem or property used.
+""".strip()
 FORMATTING_PROMPT = "Do not explain your answer but write only the answer label (A, B, ...) in this format:\n\nAnswer: \\boxed{...}."
 
 
@@ -190,16 +195,18 @@ def run_inference_over_shard(client, input_path, output_path, shard_id, num_shar
         """Yield (messages, sample) for each generation task."""
         for _, line in read_lines(input_path, shard_id, num_shards):
             sample = json.loads(line)
-            if sample["id"] not in HARD_SAMPLE_IDS:
-                continue
-            if FORMATTING_PROMPT:
-                sample["question"] = sample["question"] + "\n" + FORMATTING_PROMPT
+            # if sample["id"] not in HARD_SAMPLE_IDS:
+            #     continue
+            # privileged_question = sample["question"] + "\n" + sample["hint"] + "\n\n" + FORMATTING_PROMPT
+            sample["question"] = sample["question"] + "\n" + FORMATTING_PROMPT
             messages = build_messages(
+                # privileged_question, images=sample["images"], system_prompt=SYSTEM_PROMPT,
                 sample["question"], images=sample["images"], system_prompt=SYSTEM_PROMPT,
             )
             for _ in range(GENERATIONS_PER_PROMPT):
                 yield client, messages, sample
 
+    # total_samples = len(HARD_SAMPLE_IDS) // num_shards  # mmpr-1.2 hard samples
     total_samples = INPUT_SIZE // num_shards
     with open(output_path, "w", buffering=1, encoding="utf-8") as f:
         with show_progress(GENERATIONS_PER_PROMPT * total_samples) as progress:

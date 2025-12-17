@@ -1,0 +1,28 @@
+#!/bin/bash
+#SBATCH --array=0-3
+#SBATCH --nodes=1
+#SBATCH --gres=gpu:4
+#SBATCH --partition=batch_block1,batch_singlenode
+#SBATCH --account=llmservice_fm_vision
+#SBATCH --time=4:00:00
+
+# 2 jobs x 2 hours x ~1000 samples/hour/job = ~4k samples
+# 2k samples in geometry3k (x 2 generations)
+
+set -euo pipefail
+
+WORKDIR=/lustre/fsw/portfolios/llmservice/users/jseppanen/dev/nemo-rl-n5p5-mmpr-filtered
+INPUT_PATH=/lustre/fs1/portfolios/llmservice/users/jseppanen/data/geometry3k/geometry3k_train.jsonl
+OUTPUT_PREFIX=$WORKDIR/geometry3k_qwen_output
+NUM_SHARDS=4
+
+export HF_HOME=/lustre/fsw/portfolios/llmservice/users/jseppanen/.cache/huggingface
+
+srun \
+  --ntasks-per-node=1 \
+  --nodes=$SLURM_JOB_NUM_NODES \
+  --container-image=/lustre/fsw/portfolios/llmservice/users/jseppanen/sqsh/vllm-c799126-cuda-12.8.1.sqsh \
+  --container-mounts=/lustre:/lustre \
+  --container-workdir=$WORKDIR \
+  --label \
+  bash -lc "source /venv/bin/activate && python scripts/infer_mmpr_hard_qwen.py '$INPUT_PATH' \"${OUTPUT_PREFIX}_\${SLURM_ARRAY_TASK_ID}.jsonl\" --shard-id=\${SLURM_ARRAY_TASK_ID} --num-shards=${NUM_SHARDS}"
