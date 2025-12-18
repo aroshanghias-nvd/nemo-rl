@@ -42,6 +42,7 @@ from nemo_rl.data.interfaces import (
 from nemo_rl.data.datasets.response_datasets.vision_r1 import format_vision_r1_dataset
 from nemo_rl.data.datasets.response_datasets.mmpr_tiny import format_mmpr_tiny_dataset
 from nemo_rl.data.datasets.response_datasets.mmpr_nanov2_filtered import format_mmpr_nanov2_filtered_dataset
+from nemo_rl.data.datasets.response_datasets.blend_v1 import format_blend_v1_dataset
 from nemo_rl.data.multimodal_utils import (
     PackedTensor,
     get_dim_to_pack_along,
@@ -127,6 +128,8 @@ def hf_data_processor(
         datum_dict["task_name"] = task_data_spec.task_name
     elif task_data_spec.task_name == "mmpr_nanov2_filtered":
         datum_dict = format_mmpr_nanov2_filtered_dataset(datum_dict)
+    elif task_data_spec.task_name == "blend_v1":
+        datum_dict = format_blend_v1_dataset(datum_dict)
     else:
         raise ValueError(f"No data processor for task {task_data_spec.task_name}")
 
