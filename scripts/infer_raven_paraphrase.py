@@ -12,7 +12,6 @@ import json
 import base64
 import logging
 import os
-import random
 import re
 import socket
 import subprocess
@@ -63,6 +62,10 @@ Your task: Edit the PREDICTION to fix any errors, using the REFERENCE as ground 
 - The prediction's literal text as much as possible
 - Sentence structure and writing style
 - Level of detail (don't add or remove reasoning steps)
+
+**Rules:**
+- Don't summarize steps or patterns, but instead write out all details in full
+- Don't ever mention the reference solution; the prediction must be self-contained
 
 Write your corrected version within <prediction>...</prediction> tags.
 """.strip()

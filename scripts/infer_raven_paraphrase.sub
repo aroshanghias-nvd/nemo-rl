@@ -7,13 +7,13 @@
 #SBATCH --time=4:00:00
 
 # RAVEN has 42k samples
-# 100 jobs x 4 hours x ~200 samples/hour/job = ~60k samples
+# 100 jobs x 4 hours x ~150 samples/hour/job = ~60k samples
 
 set -euo pipefail
 
 WORKDIR=/lustre/fsw/portfolios/llmservice/users/jseppanen/dev/nemo-rl-n5p5-mmpr-filtered
-INPUT_PATH=/lustre/fsw/portfolios/llmservice/projects/llmservice_nlp_fm/datasets/eagle-next/image_data/commercial_sft_data/RAVEN/prepared/raven_train.jsonl
-OUTPUT_PREFIX=$WORKDIR/raven_output
+INPUT_PATH=$WORKDIR/raven_output.jsonl
+OUTPUT_PREFIX=$WORKDIR/raven_paraphrase_output
 NUM_SHARDS=100
 
 export HF_HOME=/lustre/fsw/portfolios/llmservice/users/jseppanen/.cache/huggingface
