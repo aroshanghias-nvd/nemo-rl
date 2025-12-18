@@ -25,4 +25,4 @@ srun \
   --container-mounts=/lustre:/lustre \
   --container-workdir=$WORKDIR \
   --label \
-  bash -lc "source /venv/bin/activate && python scripts/infer_mmpr_hard_qwen.py '$INPUT_PATH' \"${OUTPUT_PREFIX}_\${SLURM_ARRAY_TASK_ID}.jsonl\" --shard-id=\${SLURM_ARRAY_TASK_ID} --num-shards=${NUM_SHARDS}"
+  bash -lc "source /venv/bin/activate && python scripts/infer_geometry3k.py '$INPUT_PATH' \"${OUTPUT_PREFIX}_\${SLURM_ARRAY_TASK_ID}.jsonl\" --shard-id=\${SLURM_ARRAY_TASK_ID} --num-shards=${NUM_SHARDS}"

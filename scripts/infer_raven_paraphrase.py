@@ -25,13 +25,14 @@ import click
 import openai
 from tqdm import tqdm
 
-INPUT_PATH = "/lustre/fs1/portfolios/llmservice/users/jseppanen/dev/nemo-rl-n5p5-mmpr-filtered/raven_output_0.jsonl"
-INPUT_SIZE = 420
+INPUT_PATH = "/lustre/fs1/portfolios/llmservice/users/jseppanen/dev/nemo-rl-n5p5-mmpr-filtered/raven_output.jsonl"
+INPUT_SIZE = 42000
 
 MODEL = "openai/gpt-oss-120b"
 GENERATIONS_PER_PROMPT = 1
-MAX_TOKENS = 16384
+MAX_TOKENS = 32768
 
+REASONING_EFFORT = "medium"
 TEMPERATURE = 0.6
 TOP_K = 50
 TOP_P = 0.95
@@ -164,11 +165,14 @@ def wait_for_port(host, port, timeout, proc=None):
 def _process_sample(args):
     client, sample = args
 
-    natural_think = re.search(r"<think>(.*?)</think>", sample["prediction"], re.DOTALL)
-    if not natural_think:
-        return None, 0, 0
-
-    natural_think = natural_think.group(1).strip()
+    # relaxed parsing of natural thinking trace (Qwen can miss the thinking trace)
+    if "<think>" not in sample["prediction"]:
+        natural_think = sample["prediction"].replace("</think>", "").strip()
+    elif "</think>" in sample["prediction"]:
+        natural_think = re.search(r"<think>(.*)</think>", sample["prediction"], re.DOTALL).group(1).strip()
+    else:
+        # truncated
+        natural_think = re.search(r"<think>(.*)", sample["prediction"], re.DOTALL).group(1).strip()
     synthetic_think = sample["gt_think"].replace("<think>", "").replace("</think>", "").strip()
     resp, tokens, latency = _llm_call(
         client,
@@ -178,16 +182,14 @@ def _process_sample(args):
     if resp is None:
         return None, 0, 0
     rephrase_prediction = resp["prediction"]
-    rephrased = re.sub(
+    rephrased_think = re.sub(
         r"<think>(.*?)</think>", "", rephrase_prediction, flags=re.DOTALL
-    )
-    rephrased_think = re.search(
-        r"<prediction>(.*?)</prediction>", rephrased, flags=re.DOTALL
-    )
-    if not rephrased_think:
-        return None, 0, 0
-    rephrased_think = rephrased_think.group(1).strip()
-
+    ).strip()
+    # relaxed parsing of rephrased thinking trace (gpt-oss-120b can miss the output formatting)
+    if "<prediction>" in rephrased_think:
+        rephrased_think = rephrased_think.split("<prediction>")[-1].strip()
+    if "</prediction>" in rephrased_think:
+        rephrased_think = rephrased_think.split("</prediction>")[0].strip()
     prediction = (
         f"<think>\n{rephrased_think}\n</think>\n\nAnswer: \\boxed{{{sample['answer']}}}"
     )
@@ -218,7 +220,7 @@ def _llm_call(client, *, prompt=None, images=None, system_prompt=None, sample_id
                 temperature=TEMPERATURE,
                 stream=False,
                 extra_body={
-                    "reasoning_effort": "medium",
+                    "reasoning_effort": REASONING_EFFORT,
                     "top_k": TOP_K,
                     "top_p": TOP_P,
                 },

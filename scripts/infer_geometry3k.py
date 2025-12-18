@@ -12,6 +12,7 @@ import json
 import base64
 import logging
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -28,12 +29,12 @@ INPUT_PATH = "/lustre/fs1/portfolios/llmservice/users/jseppanen/data/geometry3k/
 INPUT_SIZE = 2100
 
 MODEL = "Qwen/Qwen3-VL-235B-A22B-Thinking-FP8"
-GENERATIONS_PER_PROMPT = 2
+MAX_GENERATIONS_PER_PROMPT = 32
 MAX_TOKENS = 16384
 # https://github.com/QwenLM/Qwen3-VL?tab=readme-ov-file#thinking-models
-TEMPERATURE = 0.6
-TOP_K = 20
-TOP_P = 0.95
+BASE_TEMPERATURE = 0.6
+BASE_TOP_K = 20
+BASE_TOP_P = 0.95
 
 # reduce batch size to prevent timeouts for long/slow answers
 BATCH_SIZE = 16
@@ -54,7 +55,46 @@ You are a mathematical geometry problem assistant.
 
 Show your reasoning clearly and justify each step with the theorem or property used.
 """.strip()
-FORMATTING_PROMPT = "Do not explain your answer but write only the answer label (A, B, ...) in this format:\n\nAnswer: \\boxed{...}."
+FORMATTING_PROMPT = "Write the final answer in this format:\n\nAnswer: \\boxed{...}."
+
+
+def extract_boxed_answer(text: str) -> str:
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+    candidates = extract_all_boxed(text)
+    if candidates:
+        return candidates[-1]
+    return ""
+
+
+def extract_all_boxed(text: str) -> list[str]:
+    if "\\boxed{" not in text:
+        return []
+    results = []
+    parts = text.split("\\boxed{")[1:]
+    for part in parts:
+        depth = 1
+        for i, char in enumerate(part):
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+            if depth == 0:
+                results.append(part[:i])
+                break
+    return results
+
+
+def verify_exact_string_match(pred_answer: str, gt_answer: str) -> bool:
+    return pred_answer.lower() == gt_answer.lower()
+
+
+def get_generation_params(attempt: int):
+    """Return temperature, top_k, top_p adjusted for attempt number."""
+    progress = min(attempt / MAX_GENERATIONS_PER_PROMPT, 1.0)
+    temperature = BASE_TEMPERATURE + progress * (1.0 - BASE_TEMPERATURE)
+    top_k = int(BASE_TOP_K + progress * (50 - BASE_TOP_K))
+    top_p = BASE_TOP_P + progress * (1.0 - BASE_TOP_P)
+    return temperature, top_k, top_p
 
 
 def detect_mime_type(path):
@@ -141,9 +181,40 @@ def wait_for_port(host, port, timeout, proc=None):
     raise TimeoutError(f"Port {port} not ready")
 
 
-def _infer_one(args):
-    """Execute one completion and return (sample, total_tokens)."""
-    client, messages, sample = args
+def _process_sample(args):
+    """Process a sample with dynamic retries until correct or max retries reached."""
+    client, sample = args
+    question = sample["question"] + "\n" + FORMATTING_PROMPT
+    total_tokens = 0
+    total_latency = 0
+
+    for attempt in range(MAX_GENERATIONS_PER_PROMPT):
+        temperature, top_k, top_p = get_generation_params(attempt)
+        resp, tokens, latency = _llm_call(
+            client,
+            prompt=question,
+            images=sample["images"],
+            system_prompt=SYSTEM_PROMPT,
+            sample_id=sample["id"],
+            temperature=temperature,
+            top_k=top_k,
+            top_p=top_p,
+        )
+        total_tokens += tokens
+        total_latency += latency
+        if resp is None:
+            continue
+        pred_answer = extract_boxed_answer(resp["prediction"])
+        is_correct = verify_exact_string_match(pred_answer, sample["answer"])
+        if is_correct or attempt == MAX_GENERATIONS_PER_PROMPT - 1:
+            result = {**sample, **resp, "pred_answer": pred_answer, "attempt": attempt, "correct": is_correct}
+            return result, total_tokens, total_latency
+
+    return None, total_tokens, total_latency
+
+
+def _llm_call(client, *, prompt=None, images=None, system_prompt=None, sample_id=None, temperature=BASE_TEMPERATURE, top_k=BASE_TOP_K, top_p=BASE_TOP_P):
+    messages = build_messages(prompt, images=images, system_prompt=system_prompt)
     retries = 5
     for retry in range(retries):
         try:
@@ -152,11 +223,11 @@ def _infer_one(args):
                 model=MODEL,
                 messages=messages,
                 max_tokens=MAX_TOKENS,
-                temperature=TEMPERATURE,
+                temperature=temperature,
                 stream=False,
                 extra_body={
-                    "top_k": TOP_K,
-                    "top_p": TOP_P,
+                    "top_k": top_k,
+                    "top_p": top_p,
                 },
             )
             if not (resp and resp.choices):
@@ -166,7 +237,6 @@ def _infer_one(args):
             if "</think>" in pred and "<think>" not in pred:
                 pred = "<think>\n" + pred
             result = dict(
-                sample,
                 prediction=pred,
                 finish_reason=resp.choices[0].finish_reason,
                 prompt_tokens=resp.usage.prompt_tokens,
@@ -175,42 +245,32 @@ def _infer_one(args):
             )
             return result, resp.usage.completion_tokens, latency
         except openai.BadRequestError as e:
-            logging.error(f"Bad request, skipping sample {sample['id']}: {e}")
+            logging.error(f"Bad request, skipping sample {sample_id}: {e}")
             return None, 0, 0
         except Exception as e:
             if retry < retries - 1:
                 logging.warning(
-                    f"Retry {retry + 1}/{retries}: Inference failed for sample {sample['id']}: {e}"
+                    f"Retry {retry + 1}/{retries}: Inference failed for sample {sample_id}: {e}"
                 )
                 time.sleep(2**retry)
                 continue
-            logging.exception(f"Error in inference task for sample {sample['id']}")
+            logging.exception(f"Error in inference task for sample {sample_id}")
             raise
 
 
 def run_inference_over_shard(client, input_path, output_path, shard_id, num_shards):
     """Run inference concurrently over one shard and write JSONL outputs."""
 
-    def job_iter():
-        """Yield (messages, sample) for each generation task."""
+    def jobs():
+        """Yield samples for each generation task."""
         for _, line in read_lines(input_path, shard_id, num_shards):
             sample = json.loads(line)
-            # if sample["id"] not in HARD_SAMPLE_IDS:
-            #     continue
-            # privileged_question = sample["question"] + "\n" + sample["hint"] + "\n\n" + FORMATTING_PROMPT
-            sample["question"] = sample["question"] + "\n" + FORMATTING_PROMPT
-            messages = build_messages(
-                # privileged_question, images=sample["images"], system_prompt=SYSTEM_PROMPT,
-                sample["question"], images=sample["images"], system_prompt=SYSTEM_PROMPT,
-            )
-            for _ in range(GENERATIONS_PER_PROMPT):
-                yield client, messages, sample
+            yield client, sample
 
-    # total_samples = len(HARD_SAMPLE_IDS) // num_shards  # mmpr-1.2 hard samples
     total_samples = INPUT_SIZE // num_shards
     with open(output_path, "w", buffering=1, encoding="utf-8") as f:
-        with show_progress(GENERATIONS_PER_PROMPT * total_samples) as progress:
-            for row, output_tokens, latency in concurrent_map(_infer_one, job_iter()):
+        with show_progress(total_samples) as progress:
+            for row, output_tokens, latency in concurrent_map(_process_sample, jobs()):
                 if row is not None:
                     f.write(json.dumps(row, ensure_ascii=False) + "\n")
                     progress.update(output_tokens, latency)
@@ -295,8 +355,8 @@ def vllm_server(port, *, shutdown=True):
     try:
         print(f"Launching vLLM server on port {port}", file=sys.stderr)
         proc, log = launch_vllm_server(port)
-        # Qwen3-VL-235B-A22B-Thinking-FP8 takes ~10 mins to start
-        wait_for_port("localhost", port, timeout=1200, proc=proc)
+        # Qwen3-VL-235B-A22B-Thinking-FP8 can take ~20 mins to start
+        wait_for_port("localhost", port, timeout=1800, proc=proc)
         print(f"vLLM server ready on port {port}", file=sys.stderr)
         yield
     finally:
