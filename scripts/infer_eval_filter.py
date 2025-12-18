@@ -198,7 +198,11 @@ def run_inference_over_shard(client, input_path, output_path, image_root, shard_
                 sample = json.loads(line)
             else:
                 sample = line
-            sample["images"] = [os.path.join(image_root, sample["image"])]
+            if not sample['image'].startswith(("http://", "https://")):
+                sample["images"] = [os.path.join(image_root, sample["image"])]
+            else:
+                sample["images"] = [sample["image"]]
+            
             question = sample["question"] + "\n" + PROMPT
             messages = build_messages(
                 question, images=sample["images"], reasoning=True
@@ -322,24 +326,66 @@ def evaluate_filter(input_paths, output_path):
         except Exception as e:
             logging.exception(f"Error in grade_answer: {e}")
             is_correct = False
+        image = sample["image"]
         if is_correct:
             correctness[str({"question":sample["question"],
-            "images": tuple(sample["images"]),
+            "images": tuple(image),
             "answer": sample["answer"]})] += 1/GENERATIONS_PER_PROMPT
         else:
             correctness[str({"question":sample["question"],
-            "images": tuple(sample["images"]),
+            "images": tuple(image),
             "answer": sample["answer"]})] += 0.0
-    samples_distribution = [0 for _ in range(GENERATIONS_PER_PROMPT)]
+    samples_distribution = [0 for _ in range(GENERATIONS_PER_PROMPT+1)]
     with open(output_path, "w") as f:
         for sample, pass_rate in correctness.items():
             sample = eval(sample)
             sample['pass_rate'] = pass_rate
             samples_distribution[int(pass_rate * GENERATIONS_PER_PROMPT)] += 1
-            if pass_rate >= 0.0 and pass_rate <= 0.9:
-                f.write(json.dumps(sample, ensure_ascii=False) + "\n")
+            f.write(json.dumps(sample, ensure_ascii=False) + "\n")
     print(f"Total samples : {len(correctness)}")
     print(f"distribution of samples: {samples_distribution}")
+
+# def evaluate_filter_llm(client, input_paths, output_path):
+#     PROMPT = """
+    
+    
+    
+#     """
+#     correctness = defaultdict(int)
+#     inner_pattern = r"([^\n]+?)"
+#     result_pattern = rf"(?:\\\({inner_pattern}\\\)|\${inner_pattern}\$|{inner_pattern})"
+#     answer_patterns = [
+#         rf"[Tt]he answer is {result_pattern}\.?$",
+#         # rf"[Tt]he final answer is {result_pattern}\.?$",
+#         # rf"[Tt]he result is {result_pattern}\.?$",
+#     ]
+#     for path, idx, sample in read_jsonls(input_paths):
+#         correct_answer = str(sample["answer"])
+#         output_text = sample["prediction"]
+#         output_text = re.sub(r"<think>.*</think>", "", output_text, flags=re.DOTALL)
+#         response = None
+#         for answer_pattern in answer_patterns:
+#             response = re.search(answer_pattern, output_text, flags=re.DOTALL)
+#             if not response:
+#                 continue
+#             response = next(g for g in response.groups() if g is not None)
+#             if not response:
+#                 continue
+#             response = response.strip()
+#             break
+#         if not response:
+#             continue
+#         try:
+#             is_correct = client.chat.completions.create(
+#                 model=MODEL,
+#                 messages=[{"role": "user", "content": PROMPT + output_text}],
+#                 temperature=TEMPERATURE,
+#                 stream=False,
+#             )
+#             if not (resp and resp.choices):
+#                 raise ValueError(f"No response: {resp}")
+#             pred = resp.choices[0].message.content.strip()
+
 
 
 def read_jsonls(pattern):
@@ -391,6 +437,7 @@ def main(input_path, output_dir, image_root, shard_id, num_shards, mode):
                 except Exception:
                     pass
     evaluate_filter(output_path, output_dir+f"_shard{shard_id}_filtered.jsonl")
+    #evaluate_filter_llm(client, output_path, output_dir+f"_shard{shard_id}_filtered_llm.jsonl")
 
 if __name__ == "__main__":
     main()

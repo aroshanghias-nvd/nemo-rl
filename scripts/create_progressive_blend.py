@@ -12,17 +12,16 @@ from conf.config import *
 #     --start_pass_rate 0.8 \
 #     --end_pass_rate 0
 
+
 PYTHON_LIST_VERIFIER = """
 """.strip().split()
 
 MATH_VERIFIER = """
-chart_ocr
+gameqa_140k
+OCR_human_label
 """.strip().split()
 
 MULTIPLE_CHOICE_VERIFIER = """
-dec2
-nov4
-nov23
 """.strip().split()
 
 epsilon = 0.001
@@ -221,13 +220,16 @@ if __name__ == "__main__":
         with open(dataset_path["train"], "r") as f:
             for line in f:
                 data = json.loads(line)
-                if "grade" in data:
-                    data["pass_rate"] = data["grade"]
-                if "dataset" not in data.keys() and "batch" in data.keys():
-                    data["dataset"] = "ocr_" + data["batch"]
-                    data["verifier"] = get_verifier(data["batch"])
+                if "dataset" not in data.keys():
+                    data["dataset"] = dataset_name
+                    data["verifier"] = get_verifier(dataset_name)
                 else:
                     data["verifier"] = "mathruler"
+                if "pass_rate" not in data.keys():
+                    if "grade" in data:
+                        data["pass_rate"] = data["grade"]
+                    else:
+                        raise ValueError(f"grade not in data: {data}")
                 if filter_dataset(data, args.upper_bound_pass_rate + epsilon, args.lower_bound_pass_rate - epsilon):
                     dataset.append(data)
 
