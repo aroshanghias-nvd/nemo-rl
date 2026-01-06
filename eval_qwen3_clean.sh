@@ -10,18 +10,14 @@
 #SBATCH --mem=0
 
 
-MODEL_NAME="Qwen/Qwen3-VL-8B-Thinking"
-BENCHMARK="MathVista_MINI"
-EXPERIMENT_NAME="qwen3-vl-8b-thinking-sysprompt-v2"
-
-# Paths
-NEMORL=/lustre/fsw/portfolios/llmservice/users/ikarmanov/nemo-rl
-VLMEVALKIT=/lustre/fsw/portfolios/llmservice/users/ikarmanov/VLMEvalKitMcore
+NEMORL=/lustre/fsw/portfolios/llmservice/users/smohsenitahe/Jarno_NemoRL/nano_v3_dev_latest/nemo-rl
+VLMEVALKIT=/lustre/fsw/portfolios/llmservice/users/smohsenitahe/VLMEvalKitMcore2/VLMEvalKitMcore
 QWEN3_CHAT_TPL="$NEMORL/qwen3_chat_template.jinja"
 CONTAINER_IMAGE=/lustre/fsw/portfolios/llmservice/users/matthieul/docker/megatron-dev-img-05142025-pytorch-dev-te-cd37379-energon-fix_repeat_dataset-mamba-fix-vlmeval-vllm-budget.sqsh
 
-CACHE_ROOT=/lustre/fsw/portfolios/llmservice/users/ikarmanov/.cache
+CACHE_ROOT=/lustre/fsw/portfolios/llmservice/users/smohsenitahe/cache
 OUTPUT_DIR="$NEMORL/results/${EXPERIMENT_NAME}/eval/step_0"
+MEGATRON_SRC="/lustre/fsw/portfolios/llmservice/users/amalasanjayd/dev/megatron-lm-for-eval"
 
 # Setup output directories
 mkdir -p "${OUTPUT_DIR}/benchmark_logs"
@@ -99,7 +95,9 @@ else
 fi
 
 sleep 2
-
+pip install pymupdf; pip install jiwer; pip install nagisa; pip install albumentations==2.0.8; pip install latex2sympy2
+pip pip uninstall flash-attn -y
+FLASH_ATTENTION_FORCE_BUILD="TRUE" pip install flash-attn --no-build-isolation
 #---------------------------------------------------------------------------
 # Run evaluation with official Qwen3-VL Thinking settings
 # Using GPT-4o for answer extraction (instead of default GPT-4o-mini)
