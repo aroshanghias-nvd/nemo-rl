@@ -44,6 +44,7 @@ from nemo_automodel.components.distributed.tensor_utils import (
     get_cpu_state_dict,
     to_local_if_dtensor,
 )
+from nemo_rl.models.policy.param_groups import get_param_groups_with_weight_decay
 from torch import nn
 from torch.distributed.checkpoint.state_dict import (
     StateDictOptions,
@@ -397,9 +398,10 @@ class DTensorPolicyWorkerV2:
 
         if init_optimizer:
             optimizer_cls = import_class_from_path(self.cfg["optimizer"]["name"])
-            self.optimizer = optimizer_cls(
-                self.model.parameters(), **self.cfg["optimizer"]["kwargs"]
-            )
+            optimizer_kwargs = dict(self.cfg["optimizer"]["kwargs"])
+            weight_decay = optimizer_kwargs.pop("weight_decay", 0.0)
+            param_groups = get_param_groups_with_weight_decay(self.model, weight_decay)
+            self.optimizer = optimizer_cls(param_groups, **optimizer_kwargs)
         else:
             self.optimizer = None
 
