@@ -67,6 +67,7 @@ mmpr-1.2-vqav2_en_20240402_int_pairs_vqa_format_rules
 """.strip().split()
 
 MULTIPLE_CHOICE_VERIFIER = """
+mmpr-1.2-geo170k_extracted_pairs_vqa_correctness_rules
 mmpr-1.2-koniq10k_en_20240403_pairs_vqa_correctness_rules
 mmpr-1.2-koniq10k_en_20240403_pairs_vqa_format_rules
 mmpr-1.2-scienceqa_multi_choice_en_20240402_extracted_pairs_vqa_correctness_rules

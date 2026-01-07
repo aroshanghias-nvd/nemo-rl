@@ -22,6 +22,7 @@ dpo:
 # Data configuration for MMPR
 data:
   dataset_name: "mmpr"  # MMPR dataset for multimodal preference ranking
+  data_path: "/lustre/fs1/portfolios/llmservice/users/smohsenitahe/forked_rl/RL/MMPR-v1.2"
   split: "train"
   max_input_seq_length: 2048
   prompt_file: null

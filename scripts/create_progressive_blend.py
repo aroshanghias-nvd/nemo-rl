@@ -19,6 +19,8 @@ PYTHON_LIST_VERIFIER = """
 MATH_VERIFIER = """
 gameqa_140k
 OCR_human_label
+keensight
+charxiv_synthetic
 """.strip().split()
 
 MULTIPLE_CHOICE_VERIFIER = """
@@ -89,7 +91,6 @@ def create_progressive_blend(pass_rates, start_pass_rate, end_pass_rate, batch_s
     bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
     K = len(bins)
     print(f"distribution of bins after merging: {[len(bin) for bin in bins ]}")
-    # import pdb; pdb.set_trace()
 
     # Shuffle within each bin for randomness
     for b in bins:
@@ -99,7 +100,6 @@ def create_progressive_blend(pass_rates, start_pass_rate, end_pass_rate, batch_s
     bin_ptr = [0] * K  # pointer into each bin list
 
     all_indices = []
-    print(bin_centers)
     for t in range(num_steps):
         # Schedule mean difficulty mu_t: start easy, end hard (~0.0)
         progress = t / max(num_steps - 1, 1)
@@ -146,6 +146,14 @@ def create_progressive_blend(pass_rates, start_pass_rate, end_pass_rate, batch_s
             k = random.choice(candidate_bins)
             batch_idxs.append(bins[k][bin_ptr[k]])
             bin_ptr[k] += 1
+            
+            # # Find the bin index k in candidate_bins that is closest to mu_t
+            # # We use the absolute difference between bin_centers and mu_t
+            # distances = np.abs(bin_centers[candidate_bins] - mu_t)
+            # k = candidate_bins[np.argmin(distances)]
+
+            # batch_idxs.append(bins[k][bin_ptr[k]])
+            # bin_ptr[k] += 1
         random.shuffle(batch_idxs)
         all_indices.extend(batch_idxs)
     return np.array(all_indices)
@@ -210,7 +218,7 @@ if __name__ == "__main__":
     parser.add_argument("--start_pass_rate", type=float, required=True, help="Start pass rate")
     parser.add_argument("--end_pass_rate", type=float, required=True, help="End pass rate")
     parser.add_argument("--upper_bound_pass_rate", default=0.8, type=float, help="Upper bound pass rate")
-    parser.add_argument("--lower_bound_pass_rate", default=0.0, type=float, help="Lower bound pass rate")
+    parser.add_argument("--lower_bound_pass_rate", default=0.1, type=float, help="Lower bound pass rate")
     parser.add_argument("--data_blend", type=str, help="data blend from the config file")
     args = parser.parse_args()
 

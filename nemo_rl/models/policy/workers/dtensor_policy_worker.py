@@ -49,6 +49,7 @@ from transformers.models.gemma3.modeling_gemma3 import Gemma3ForCausalLM
 from nemo_rl.algorithms.interfaces import LossFunction, LossType
 from nemo_rl.algorithms.loss_functions import SequencePackingLossWrapper
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
+from nemo_rl.models.policy.param_groups import get_param_groups_with_weight_decay
 from nemo_rl.distributed.model_utils import (
     allgather_cp_sharded_tensor,
     distributed_vocab_topk,
@@ -404,9 +405,10 @@ class DTensorPolicyWorker(AbstractPolicyWorker, ColocatablePolicyInterface):
 
         if init_optimizer:
             optimizer_cls = get_class(self.cfg["optimizer"]["name"])
-            self.optimizer = optimizer_cls(
-                self.model.parameters(), **self.cfg["optimizer"]["kwargs"]
-            )
+            optimizer_kwargs = dict(self.cfg["optimizer"]["kwargs"])
+            weight_decay = optimizer_kwargs.pop("weight_decay", 0.0)
+            param_groups = get_param_groups_with_weight_decay(self.model, weight_decay)
+            self.optimizer = optimizer_cls(param_groups, **optimizer_kwargs)
         else:
             self.optimizer = None
 

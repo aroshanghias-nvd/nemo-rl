@@ -104,49 +104,46 @@ def format_mmpr_dataset(
         ],
     }
 
-def process_mmpr_example(example: dict[str, Any]) -> dict[str, Any]:
-    """Process an MMPR example."""
-    thinking_mode = False
-    if "final answer:" in example["chosen"].lower():
-        index_chosen = example["chosen"].lower().find("final answer:")
-        example["chosen"] = "<think>" + example["chosen"][:index_chosen] + "</think>" + example["chosen"][index_chosen:]
-        index_rejected = example["rejected"].lower().find("final answer:")
-        example["rejected"] = "<think>" + example["rejected"][:index_rejected] + "</think>" + example["rejected"][index_rejected:]
-        thinking_mode = True
-    elif "\\boxed" in example["chosen"]:
-        index_chosen = example["chosen"].find("\\boxed")
-        example["chosen"] = "<think>" + example["chosen"][:index_chosen] + "</think>" + example["chosen"][index_chosen:]
-        index_rejected = example["rejected"].find("\\boxed")
-        example["rejected"] = "<think>" + example["rejected"][:index_rejected] + "</think>" + example["rejected"][index_rejected:]
-        thinking_mode = True
-    else:
-        example["chosen"] = "<think></think>" + example["chosen"] 
-        example["rejected"] = "<think></think>" + example["rejected"] 
-        thinking_mode = False
+# def process_mmpr_example(example: dict[str, Any]) -> dict[str, Any]:
+#     """Process an MMPR example."""
+#     thinking_mode = False
+#     if "final answer:" in example["chosen"].lower():
+#         index_chosen = example["chosen"].lower().find("final answer:")
+#         example["chosen"] = "<think>" + example["chosen"][:index_chosen] + "</think>" + example["chosen"][index_chosen:]
+#         index_rejected = example["rejected"].lower().find("final answer:")
+#         example["rejected"] = "<think>" + example["rejected"][:index_rejected] + "</think>" + example["rejected"][index_rejected:]
+#         thinking_mode = True
+#     elif "\\boxed" in example["chosen"]:
+#         index_chosen = example["chosen"].find("\\boxed")
+#         example["chosen"] = "<think>" + example["chosen"][:index_chosen] + "</think>" + example["chosen"][index_chosen:]
+#         index_rejected = example["rejected"].find("\\boxed")
+#         example["rejected"] = "<think>" + example["rejected"][:index_rejected] + "</think>" + example["rejected"][index_rejected:]
+#         thinking_mode = True
+#     else:
+#         example["chosen"] = "<think></think>" + example["chosen"] 
+#         example["rejected"] = "<think></think>" + example["rejected"] 
+#         thinking_mode = False
 
-    if thinking_mode:
-        example["system"] = "/think"
-    else:
-        example["system"] = "/no_think"
-    return example
+#     if thinking_mode:
+#         example["system"] = "/think"
+#     else:
+#         example["system"] = "/no_think"
+#     return example
 
-def prepare_mmpr_dataset(
-    split: str = "train", task_name: Optional[str] = None
-):
+def prepare_mmpr_dataset(data_path: str, split: str, task_name: Optional[str] = None):
     """Prepare the MMPR dataset for training."""
     if task_name is None:
         task_name = "mmpr"
 
     try:
-        # Load the MMPR dataset from HuggingFace
-        print("Loading MMPR dataset from HuggingFace...")
+        print(f"Loading MMPR dataset from {data_path}...")
 
         # Try multiple loading strategies due to dataset structure complexity
         full_dataset = None
         import json
         import os
         from datasets import Dataset
-        with open(f"./MMPR-v1.2/meta.json", "r") as f:
+        with open(f"{data_path}/meta.json", "r") as f:
             meta_data = json.load(f)
 
         dataset = []
@@ -161,12 +158,9 @@ def prepare_mmpr_dataset(
             with open(annotation_file, "r") as f:
                 for line in f:
                     rec = json.loads(line)
-                    if "<think>" in rec["question"]:
-                        rec["system"] = "/think"
-                    else:
-                        rec["system"] = "/no_think"
-                        rec["chosen"] = "<think></think>" + rec["chosen"] 
-                        rec["rejected"] = "<think></think>" + rec["rejected"] 
+                    if "<think>" not in rec["question"]:
+                        rec["chosen"] = "<think></think>\n\n" + rec["chosen"] 
+                        rec["rejected"] = "<think></think>\n\n" + rec["rejected"] 
 
                     #rec = process_mmpr_example(json.loads(line))
                     if isinstance(rec["image"], str):
@@ -210,6 +204,7 @@ class MMPRDataset:
 
     def __init__(
         self,
+        data_path: str,
         split: str = "train",
         prompt_file: Optional[str] = None,
     ):
@@ -220,7 +215,7 @@ class MMPRDataset:
 
         self.task_name = "mmpr"
         self.formatted_ds = prepare_mmpr_dataset(
-            split=split, task_name=self.task_name
+            data_path=data_path, split=split, task_name=self.task_name
         )
 
         self.task_spec = TaskDataSpec(

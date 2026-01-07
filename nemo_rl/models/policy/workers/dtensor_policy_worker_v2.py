@@ -80,6 +80,7 @@ from nemo_rl.models.policy.interfaces import (
     LogprobOutputSpec,
     ScoreOutputSpec,
 )
+from nemo_rl.models.policy.param_groups import get_param_groups_with_weight_decay
 from nemo_rl.models.policy.utils import (
     configure_dynamo_cache,
     get_runtime_env_for_policy_worker,
@@ -477,10 +478,10 @@ class DTensorPolicyWorkerV2(AbstractPolicyWorker, ColocatablePolicyInterface):
 
         if init_optimizer:
             optimizer_cls = get_class(self.cfg["optimizer"]["name"])
-            self.optimizer = optimizer_cls(
-                self.model.parameters(),
-                **self.cfg["optimizer"]["kwargs"],
-            )
+            optimizer_kwargs = dict(self.cfg["optimizer"]["kwargs"])
+            weight_decay = optimizer_kwargs.pop("weight_decay", 0.0)
+            param_groups = get_param_groups_with_weight_decay(self.model, weight_decay)
+            self.optimizer = optimizer_cls(param_groups, **optimizer_kwargs)
         else:
             self.optimizer = None
 
