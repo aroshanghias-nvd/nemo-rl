@@ -63,9 +63,8 @@ NRL_NSYS_PROFILE_STEP_RANGE=3:10 NRL_NSYS_WORKER_PATTERNS="dtensor_policy_worker
 
 ### Profile Megatron Workers
 
-:::{important}
-To profile a Megatron worker, you should set `LD_LIBRARY_PATH` as follows, otherwise you will get errors when loading `libtransformer_engine.so`.
-:::
+> [!IMPORTANT]
+> To profile a Megatron worker, you should set `LD_LIBRARY_PATH` as follows, otherwise you will get errors when loading `libtransformer_engine.so`.
 
 ```bash
 LD_LIBRARY_PATH="/usr/local/cuda/targets/x86_64-linux/lib:/usr/local/cuda/lib64:/usr/local/cuda/lib:/usr/local/nvidia/lib64:/usr/local/nvidia/lib:/usr/lib/x86_64-linux-gnu" \
@@ -101,7 +100,8 @@ To analyze the generated profile files, load the `.nsys-rep` files into the NVID
 
 Nsight Systems supports [multi-report view](https://docs.nvidia.com/nsight-systems/UserGuide/index.html#viewing-multiple-reports-in-the-same-timeline) functionality. If you open the profiles from different workers (e.g., `*policy_worker*.nsys-rep` and `*generation_worker*.nsys-rep`) in a single multi-report view, you can analyze the behavior of the end-to-end RL loop on the same timeline.
 
-<img src="assets/nsys-multi-report-view.png" alt="Pretraining loss curves" width="1000"/>
+
+![Nsys multi report view](./assets/nsys-multi-report-view.png)
 
 ## How We Patched Nsight Support in Ray
 

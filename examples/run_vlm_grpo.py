@@ -313,6 +313,7 @@ def setup_data(
     )
     task_data_processors[task_name] = (vlm_task_spec, hf_data_processor)
 
+    env_name = data_config["env_name"]
     vlm_env = VLMEnvironment.options(  # type: ignore # it's wrapped with ray.remote
         runtime_env={
             "py_executable": get_actor_python_env(
@@ -320,7 +321,7 @@ def setup_data(
             ),
             "env_vars": dict(os.environ),  # Pass thru all user environment variables
         }
-    ).remote(env_configs[task_name])
+    ).remote(env_configs[env_name])
 
     dataset = AllTaskProcessedDataset(
         data.formatted_ds["train"],
@@ -393,6 +394,12 @@ def main() -> None:
     config["policy"]["generation"] = configure_generation_config(
         config["policy"]["generation"], processor.tokenizer
     )
+    if "vllm_cfg" in config["policy"]["generation"]:
+        assert (
+            config["policy"]["generation"]["vllm_cfg"]["skip_tokenizer_init"] == False
+        ), (
+            "VLMs require tokenizer to be initialized before generation, so skip_tokenizer_init must be set to False."
+        )
 
     # setup data
     # this function is local to this script, and can be extended to other VLM datasets

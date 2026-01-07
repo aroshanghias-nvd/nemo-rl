@@ -82,12 +82,15 @@ def setup_data(
 
     # load dataset
     data: Any = load_response_dataset(data_config, seed)
+    task_name = (
+        data.task_name if hasattr(data, "task_name") else data.task_spec.task_name
+    )
 
     # data processor
     task_data_processors: dict[str, tuple[TaskDataSpec, TaskDataProcessFnCallable]] = (
         defaultdict(lambda: (math_task_spec, math_hf_data_processor))
     )
-    task_data_processors["math"] = (math_task_spec, math_hf_data_processor)
+    task_data_processors[task_name] = (math_task_spec, math_hf_data_processor)
 
     # setup math environment
     math_env = MathEnvironment.options(  # type: ignore # it's wrapped with ray.remote
@@ -120,7 +123,7 @@ def setup_data(
         val_dataset = None
 
     task_to_env: dict[str, EnvironmentInterface] = defaultdict(lambda: math_env)
-    task_to_env["math"] = math_env
+    task_to_env[task_name] = math_env
     return dataset, val_dataset, task_to_env, task_to_env
 
 
@@ -190,6 +193,28 @@ def main() -> None:
 
     # Check if async mode is enabled
     if "async_grpo" in config["grpo"] and config["grpo"]["async_grpo"]["enabled"]:
+        # Async GRPO does not support dynamic sampling, reward scaling, or reward shaping (DAPO features)
+        unsupported_features = [
+            "use_dynamic_sampling",
+            "reward_scaling",
+            "reward_shaping",
+        ]
+
+        for feature in unsupported_features:
+            if feature not in config["grpo"]:
+                continue
+
+            if feature == "use_dynamic_sampling":
+                if config["grpo"][feature]:
+                    raise NotImplementedError(
+                        f"{feature} is not supported with async GRPO"
+                    )
+            else:
+                if config["grpo"][feature]["enabled"]:
+                    raise NotImplementedError(
+                        f"{feature} is not supported with async GRPO"
+                    )
+
         from nemo_rl.algorithms.grpo import async_grpo_train
 
         print("🚀 Running async GRPO training")

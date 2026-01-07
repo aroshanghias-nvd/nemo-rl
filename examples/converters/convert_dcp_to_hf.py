@@ -63,6 +63,7 @@ def main():
     # This is more stable than relying on the current NeMo-RL get_tokenizer() which can
     # change release to release.
     tokenizer_name_or_path = config["policy"]["model_name"]
+    hf_overrides = config["policy"].get("hf_overrides", {}) or {}
 
     nemotron_h_nano_vl.register()
 
@@ -71,6 +72,7 @@ def main():
         hf_ckpt_path=args.hf_ckpt_path,
         model_name_or_path=model_name_or_path,
         tokenizer_name_or_path=tokenizer_name_or_path,
+        hf_overrides=hf_overrides,
     )
 
     # copy extra *.jinja/*.json/*.py files

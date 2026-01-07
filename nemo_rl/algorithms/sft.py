@@ -90,12 +90,12 @@ def setup(
     master_config: MasterConfig,
     tokenizer: AutoTokenizer,
     train_dataset: AllTaskProcessedDataset,
-    val_dataset: AllTaskProcessedDataset,
+    val_dataset: Optional[AllTaskProcessedDataset],
 ) -> tuple[
     Policy,
     RayVirtualCluster,
     StatefulDataLoader,
-    StatefulDataLoader,
+    Optional[StatefulDataLoader],
     NLLLoss,
     Logger,
     CheckpointManager,
@@ -149,14 +149,17 @@ def setup(
         )
         train_dataloader.load_state_dict(dataloader_state_dict)
 
-    val_dataloader = StatefulDataLoader(
-        val_dataset,
-        batch_size=sft_config["val_global_batch_size"],
-        shuffle=False,
-        collate_fn=rl_collate_fn,
-        drop_last=False,
-        num_workers=data_config["num_workers"],
-    )
+    if val_dataset is not None:
+        val_dataloader = StatefulDataLoader(
+            val_dataset,
+            batch_size=sft_config["val_global_batch_size"],
+            shuffle=False,
+            collate_fn=rl_collate_fn,
+            drop_last=False,
+            num_workers=data_config["num_workers"],
+        )
+    else:
+        val_dataloader = None
 
     # ==========================
     #          Cluster
@@ -202,6 +205,9 @@ def setup(
         init_optimizer=True,
         init_reference_model=False,
     )
+    # print the node IP and GPU ID of the policy workers for debugging
+    policy.print_node_ip_and_gpu_id()
+
     loss_fn = NLLLoss()
     print("  ✓ Model initialized")
 
@@ -227,7 +233,7 @@ def setup(
 # =======================================================
 def validate(
     policy: PolicyInterface,
-    val_dataloader: StatefulDataLoader,
+    val_dataloader: Optional[StatefulDataLoader],
     tokenizer,
     loss_fn,
     step: int,
@@ -239,11 +245,11 @@ def validate(
 ):
     """Run validation on the validation dataset."""
     if val_dataloader is None:
-        assert val_dataloader is not None or master_config["dpo"]["val_period"] == 0, (
-            "val_dataloader is None, so dpo.val_period must be 0"
+        assert master_config["sft"]["val_period"] <= 0, (
+            "val_dataloader is None, so sft.val_period must be <= 0"
         )
         print("  ⚠️ No validation dataloader provided, skipping validation")
-        return
+        return {}, {}
 
     timer = Timer()
 
@@ -483,13 +489,17 @@ def sft_train(
                     "loss": train_results["loss"].numpy(),
                     "grad_norm": train_results["grad_norm"].numpy(),
                 }
+                if "moe_metrics" in train_results:
+                    metrics.update(
+                        {f"moe/{k}": v for k, v in train_results["moe_metrics"].items()}
+                    )
                 metrics.update(train_results["all_mb_metrics"])
                 for k, v in metrics.items():
                     if k in {"lr", "wd", "global_valid_seqs", "global_valid_toks"}:
                         metrics[k] = np.mean(v).item()
                     else:
                         metrics[k] = np.sum(v).item()
-                total_valid_tokens += metrics["global_valid_toks"]
+                total_valid_tokens += metrics.get("global_valid_toks", 0)
 
                 ## Checkpointing
                 sft_save_state["consumed_samples"] += master_config["policy"][
@@ -512,20 +522,35 @@ def sft_train(
                     sft_save_state["total_steps"] = total_steps + 1
                     sft_save_state["epoch"] = current_epoch
                     sft_save_state["total_valid_tokens"] = total_valid_tokens
-                    if val_metrics is not None:
-                        sft_save_state["val_loss"] = val_metrics["val_loss"]
-                    elif "val_loss" in sft_save_state:
-                        del sft_save_state["val_loss"]
 
-                    if master_config["checkpointing"]["metric_name"] is not None:
-                        if (
-                            master_config["checkpointing"]["metric_name"]
-                            not in sft_save_state
-                        ):
+                    full_metric_name = master_config["checkpointing"]["metric_name"]
+                    if full_metric_name is not None:
+                        assert full_metric_name.startswith(
+                            "train:"
+                        ) or full_metric_name.startswith("val:"), (
+                            f"metric_name={full_metric_name} must start with 'val:' or 'train:',\n"
+                            f'followed by the corresponding name in the "val" or "train" metrics dictionary.'
+                            f"  If you are using an old config, please updated checkpointing.metric_name to the new format, "
+                            f" e.g. 'val_loss --> 'val:val_loss'"
+                        )
+                        prefix, metric_name = full_metric_name.split(":", 1)
+                        metrics_source = metrics if prefix == "train" else val_metrics
+                        if not metrics_source:
                             warnings.warn(
-                                f"You asked to save checkpoints based on {master_config['checkpointing']['metric_name']} but the metric is not found in the save state. "
-                                "This checkpoint will not be saved as top-k."
+                                f"You asked to save checkpoints based on {metric_name} but no {prefix} metrics were collected. "
+                                "This checkpoint will not be saved as top-k.",
+                                stacklevel=2,
                             )
+                            if full_metric_name in sft_save_state:
+                                del sft_save_state[full_metric_name]
+                        elif metric_name not in metrics_source:
+                            raise ValueError(
+                                f"Metric {metric_name} not found in {prefix} metrics"
+                            )
+                        else:
+                            sft_save_state[full_metric_name] = metrics_source[
+                                metric_name
+                            ]
 
                     with timer.time("checkpointing"):
                         print(f"Saving checkpoint for step {total_steps + 1}...")
@@ -588,9 +613,12 @@ def sft_train(
                 master_config["cluster"]["num_nodes"]
                 * master_config["cluster"]["gpus_per_node"]
             )
-            timing_metrics["valid_tokens_per_sec_per_gpu"] = (
-                metrics["global_valid_toks"] / total_time / total_num_gpus
-            )
+            if total_time > 0:
+                timing_metrics["valid_tokens_per_sec_per_gpu"] = (
+                    metrics.get("global_valid_toks", 0) / total_time / total_num_gpus
+                )
+            else:
+                timing_metrics["valid_tokens_per_sec_per_gpu"] = 0.0
             logger.log_metrics(metrics, total_steps + 1, prefix="train")
             logger.log_metrics(timing_metrics, total_steps + 1, prefix="timing/train")
 
@@ -599,8 +627,13 @@ def sft_train(
             total_steps += 1
 
             if should_save_by_timeout:
+                print("Timeout has been reached, stopping training early", flush=True)
                 return
             if total_steps >= master_config["sft"]["max_num_steps"]:
+                print(
+                    "Max number of steps has been reached, stopping training early",
+                    flush=True,
+                )
                 return
 
         current_epoch += 1
