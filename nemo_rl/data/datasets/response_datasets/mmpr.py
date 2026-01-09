@@ -113,6 +113,7 @@ def prepare_mmpr_dataset(data_path: str, split: str, task_name: Optional[str] = 
         from datasets import Dataset
         with open(f"{data_path}/meta.json", "r") as f:
             meta_data = json.load(f)
+        root = data_path.rstrip("/").replace("/MMPR-v1.2", "")
 
         dataset = []
         for dataset_name, dataset_info in meta_data.items():
@@ -121,8 +122,8 @@ def prepare_mmpr_dataset(data_path: str, split: str, task_name: Optional[str] = 
                 # elif dataset_name.split("_")[0] in ["ai2d", "chartqa", "CLEVR", "cocorem","docvqa", "dvqa", "gaokao", "geo170k","geometry3k", "geomverse","geoqa+", "geos" \
                 # "MathV360K", "mavis", "unigeo", "super", "vqav2"]:
 
-            image_root = dataset_info["root"]
-            annotation_file = dataset_info["annotation"]
+            image_root = root + "/" + dataset_info["root"]
+            annotation_file = root + "/" + dataset_info["annotation"]
             with open(annotation_file, "r") as f:
                 for line in f:
                     rec = json.loads(line)
@@ -148,6 +149,7 @@ def prepare_mmpr_dataset(data_path: str, split: str, task_name: Optional[str] = 
 
     except Exception as e:
         print(f"Error loading MMPR dataset: {e}")
+        raise
 
     # Add task_name column
     train_dataset = train_dataset.add_column("task_name", [task_name] * len(train_dataset))

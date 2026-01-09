@@ -280,6 +280,7 @@ def setup_data(
     # Load appropriate VLM dataset
     if data_config["dataset_name"] == "mmpr":
         data: Any = MMPRDataset(
+            data_path=data_config["data_path"],
             split=data_config["split"]
         )
     else:
