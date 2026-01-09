@@ -1,7 +1,7 @@
 [submodule "3rdparty/Megatron-LM"]
 	path = 3rdparty/Megatron-LM-workspace/Megatron-LM
 	url = https://gitlab-master.nvidia.com/ADLR/megatron-lm.git
-	branch = bridge-dev/nano-v3-vl
+	branch = jseppanen/nano-v3-vl-bridge
 	shallow = true
 [submodule "3rdparty/Megatron-Bridge"]
 	path = 3rdparty/Megatron-Bridge-workspace/Megatron-Bridge

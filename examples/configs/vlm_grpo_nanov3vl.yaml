@@ -1,0 +1,41 @@
+# TORCH_CUDA_ARCH_LIST="9.0 10.0" NRL_FORCE_REBUILD_VENVS=true uv run examples/run_vlm_grpo.py --config examples/configs/vlm_grpo_nanov3vl.yaml
+
+defaults: vlm_grpo_3B.yaml
+checkpointing:
+  enabled: false
+  checkpoint_dir: results/clevr_grpo
+cluster:
+  gpus_per_node: 8
+  num_nodes: 1
+policy:
+  max_total_sequence_length: 3072
+  dtensor_cfg:
+    enabled: false
+  dynamic_batching:
+    enabled: false
+  make_sequence_length_divisible_by: ${policy.megatron_cfg.tensor_model_parallel_size}
+  model_name: "/lustre/fsw/portfolios/llmservice/users/kchumachenko/workspace/output/sft_moe_rl_llm_eval_mode_radio_v4_two_epochs_bs_x2_1212_matthieul/checkpoints/tp_1/check_hf_2/mcore_to_hf"
+  optimizer: null
+  sequence_packing:
+    enabled: false
+  generation:
+    vllm_cfg:
+      tensor_parallel_size: 1
+      gpu_memory_utilization: 0.9
+  megatron_cfg:
+    enabled: true
+    tensor_model_parallel_size: 2
+    bias_activation_fusion: false
+    optimizer:
+      lr: 5.0e-07
+      min_lr: 5.0e-08
+    scheduler:
+      lr_warmup_iters: 50
+      lr_warmup_init: 5.0e-08
+    distributed_data_parallel_config:
+      overlap_grad_reduce: false
+logger:
+  wandb_enabled: true
+  wandb:
+    project: grpo-dev-vlm-jseppanen
+    name: nano-v3-vl-clevr
