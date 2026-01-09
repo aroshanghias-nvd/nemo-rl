@@ -117,6 +117,7 @@ policy:
       limit_mm_per_prompt: {"image": 2}
       max_num_batched_tokens: ${policy.max_total_sequence_length}
       max_num_seqs: 64
+      mamba_ssm_cache_dtype: "float32"
     colocated:
       # true: generation shares training GPUs
       # false: uses dedicated generation resources
