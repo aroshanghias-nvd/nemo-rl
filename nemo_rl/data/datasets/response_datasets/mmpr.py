@@ -12,56 +12,29 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import base64
-import io
-from typing import Any, Optional
-
-from datasets import load_dataset
-from PIL import Image
 import json
 import os
+from typing import Any, Optional
+
 from datasets import Dataset
 from nemo_rl.data.interfaces import TaskDataSpec
 
 
-def pil_to_base64(image: Image.Image, format: str = "PNG") -> str:
-    """Converts a PIL Image object to a base64 encoded string.
-
-    Args:
-        image: The PIL Image object to convert.
-        format: The image format (e.g., "PNG", "JPEG"). Defaults to "PNG".
-
-    Returns:
-        A base64 encoded string representation of the image.
-    """
-    buffered = io.BytesIO()
-    image.save(buffered, format=format)
-    img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
-    return f"data:image/png;base64,{img_str}"
-
-
-def format_mmpr_dataset(
-    example: dict[str, Any], return_pil: bool = False
-) -> dict[str, Any]:
+def format_mmpr_dataset(example: dict[str, Any]) -> dict[str, Any]:
     """Format the MMPR dataset into an OpenAI-API-like message log for DPO training.
 
     Expected MMPR format:
     {
-        "image": PIL.Image or path,
+        "image": path or list of paths,
         "question": str,
         "chosen_response": str,  # Preferred response
         "rejected_response": str,  # Non-preferred response
         ...
     }
     """
-    if isinstance(example["image"], str):
-        pil_img = Image.open(example["image"]).convert("RGB")
-    elif hasattr(example["image"], "convert"):  # already PIL
-        pil_img = example["image"]
-    elif isinstance(example["image"], list):
-        pil_img = [Image.open(image).convert("RGB") for image in example["image"]]
-    else:
-        pil_img = Image.fromarray(example["image"]).convert("RGB")
+    images = example["image"]
+    if isinstance(images, str):
+        images = [images]
 
     user_content = [
         {
@@ -70,17 +43,12 @@ def format_mmpr_dataset(
         },
     ]
 
-    if isinstance(pil_img, list):
-        for img in pil_img:
-            user_content.append({
-                "type": "image",
-                "image": pil_to_base64(img),
-            })
-    else:
+    for img in images:
         user_content.append({
             "type": "image",
-            "image": pil_to_base64(pil_img),
+            "image": img,
         })
+
     # For DPO, we need both chosen and rejected responses
     # MMPR typically provides preference pairs
     chosen_content = str(example.get("chosen_response", example.get("chosen", "")))

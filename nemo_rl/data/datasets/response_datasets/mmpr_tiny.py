@@ -20,27 +20,16 @@ from typing import Any, Optional
 import pandas as pd
 from datasets import Dataset
 from huggingface_hub import hf_hub_download
-from PIL import Image
 
 from nemo_rl.data.interfaces import TaskDataSpec
-from nemo_rl.data.datasets.response_datasets.vision_r1 import pil_to_base64
 
 
-def format_mmpr_tiny_dataset(
-    example: dict[str, Any], return_pil: bool = False
-) -> dict[str, Any]:
+def format_mmpr_tiny_dataset(example: dict[str, Any]) -> dict[str, Any]:
     """Format the MMPR-Tiny dataset into an OpenAI-API-like message log."""
-    # Image is stored as list (matching vision_r1 structure)
-    image = example["images"][0]
-    if not isinstance(image, Image.Image):
-        image = Image.open(image).convert("RGB")
-    
     user_content = [
         {
             "type": "image",
-            "image": pil_to_base64(image)
-            if not return_pil
-            else image,
+            "image": example["images"][0],
         },
         {
             "type": "text",
@@ -156,11 +145,9 @@ def prepare_mmpr_tiny_dataset(
     # Add task_name column
     df = df.assign(task_name=task_name)
     
-    # Convert to HF Dataset with Image feature (lazy loading!)
-    # Use Sequence of Images to match vision_r1 structure
-    from datasets import Features, Value, Image as ImageFeature, Sequence
+    from datasets import Features, Value, Sequence
     features = Features({
-        'images': Sequence(ImageFeature()),  # List of images
+        'images': Sequence(Value('string')),
         'question': Value('string'),
         'answer': Value('string'),
         'task_name': Value('string'),
