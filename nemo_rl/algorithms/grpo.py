@@ -1072,7 +1072,6 @@ def grpo_train(
         dynamic_sampling_num_gen_batches = 0
 
         # Run grpo/dapo training loop (single-turn)
-        ddd = dataloader.dataset[0]
         for batch in dataloader:
             print(
                 f"\n{'=' * 25} Step {current_step + 1}/{min(len(dataloader), max_num_steps)} {'=' * 25}",
