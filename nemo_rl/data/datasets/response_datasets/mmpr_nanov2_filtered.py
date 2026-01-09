@@ -83,13 +83,23 @@ class MmprNanov2FilteredDataset:
         self,
         train_data_path: Optional[str] = None,
         prompt_file: Optional[str] = None,
+        val_size: int = 500,
     ):
         self.task_name = "mmpr_nanov2_filtered"
         if not train_data_path:
             raise ValueError("MmprNanov2FilteredDataset requires a JSONL path")
+        full_dataset = self._load_jsonl(train_data_path)
+        if val_size > 0:
+            # take last (most difficult) samples
+            cutoff = len(full_dataset) - val_size
+            val_dataset = full_dataset.select(range(cutoff, len(full_dataset)))
+            train_dataset = full_dataset.select(range(cutoff))
+        else:
+            train_dataset = full_dataset
+            val_dataset = None
         self.formatted_ds = {
-            "train": self._load_jsonl(train_data_path),
-            "validation": None,
+            "train": train_dataset,
+            "validation": val_dataset,
         }
         self.task_spec = TaskDataSpec(task_name="mmpr_nanov2_filtered", prompt_file=prompt_file)
 
