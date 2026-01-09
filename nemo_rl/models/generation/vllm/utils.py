@@ -12,11 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import base64
+from io import BytesIO
 from typing import Any, Optional
+
 from PIL import Image
 
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 from nemo_rl.models.generation.interfaces import GenerationDatumSpec
+
+
+def load_image(image: str) -> Image.Image:
+    """Load an image from file path or base64 string."""
+    if image.startswith("data:"):
+        _, encoded = image.split(",", 1)
+        return Image.open(BytesIO(base64.b64decode(encoded))).convert("RGB")
+    return Image.open(image).convert("RGB")
 
 
 def format_prompt_for_vllm_generation(
@@ -72,7 +83,7 @@ def format_prompt_for_vllm_generation(
                 prompts.append(_get_regular_prompt(i))
                 continue
             else:
-                pil_images = [Image.open(image).convert("RGB") for image in images[i]]
+                pil_images = [load_image(image) for image in images[i]]
                 prompt_dict["multi_modal_data"] = {
                     "image": pil_images[0] if len(pil_images) == 1 else pil_images
                 }
