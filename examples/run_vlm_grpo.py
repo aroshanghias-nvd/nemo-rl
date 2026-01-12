@@ -334,8 +334,10 @@ def hf_data_processor(
     system_message["token_ids"] = message_sys["input_ids"][0]
     sys_len = message_sys["input_ids"].shape[1]
     if "num_patches" in message_both:
+        img_start_token_id = processor.tokenizer.convert_tokens_to_ids("<img>")
+        img_end_token_id = processor.tokenizer.convert_tokens_to_ids("</img>")
         user_message["token_ids"] = adjust_image_tokens(
-            message_both["input_ids"][:, sys_len:], message_both["num_patches"], 131073, 131074
+            message_both["input_ids"][:, sys_len:], message_both["num_patches"], img_start_token_id, img_end_token_id
         )[0]
     else:
         user_message["token_ids"] = message_both["input_ids"][0][sys_len:]
