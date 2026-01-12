@@ -53,6 +53,18 @@ def import_model_from_hf_name(
     )
     orig_pipeline_dtype = model_provider.pipeline_dtype
 
+    radio_config_keys = [
+        "radio_force_eval_mode",
+        "radio_force_cpe_eval_mode",
+        "radio_interpolate_only_cpe",
+        "radio_cpe_aspect_ratio_select",
+        "radio_disable_cpe",
+    ]
+    if megatron_config is not None:
+        for key in radio_config_keys:
+            if key in megatron_config:
+                setattr(model_provider, key, megatron_config[key])
+
     if megatron_config is not None:
         model_provider.tensor_model_parallel_size = megatron_config[
             "tensor_model_parallel_size"

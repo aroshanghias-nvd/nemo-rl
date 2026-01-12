@@ -629,6 +629,27 @@ def get_formatted_message_log(
                 if key in processed_chunk:
                     new_message[key] = PackedTensor(processed_chunk[key], dim_to_pack=0)
 
+            # compute imgs_sizes for dynamic resolution from pixel_values shape
+            if "pixel_values" in processed_chunk:
+                pv = processed_chunk["pixel_values"]
+                if pv.dim() == 4:
+                    # Shape: [num_images, C, H, W] -> extract H, W for each image
+                    imgs_sizes = torch.tensor(
+                        [[pv.shape[2], pv.shape[3]] for _ in range(pv.shape[0])],
+                        dtype=torch.int32,
+                    )
+                elif pv.dim() == 5:
+                    # Shape: [batch, num_images, C, H, W] -> extract H, W for each image
+                    imgs_sizes = torch.tensor(
+                        [[pv.shape[3], pv.shape[4]] for _ in range(pv.shape[0] * pv.shape[1])],
+                        dtype=torch.int32,
+                    )
+                else:
+                    # Fallback for other formats
+                    imgs_sizes = None
+                if imgs_sizes is not None:
+                    new_message["imgs_sizes"] = imgs_sizes
+
         if len(new_message["token_ids"]) == 0:
             # if there is an empty message, the empty `token_ids` tensor ends up being in fp32,
             # which causes `_validate_tensor_consistency` to fail. To fix this, we convert the

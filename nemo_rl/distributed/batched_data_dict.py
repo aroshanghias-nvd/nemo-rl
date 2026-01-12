@@ -76,6 +76,7 @@ class BatchedDataDict(UserDict, Generic[DictT]):
     # keys that are model specific, but not part of the PackedTensor
     ADDITIONAL_OPTIONAL_KEY_TENSORS = [
         "token_type_ids",  # specific to gemma3 that tells where the image tokens are in the sequence, not required for llm-only inference/training
+        "imgs_sizes",  # for dynamic resolution VLMs: tensor of shape [num_images, 2] with (H, W) per image
     ]
 
     def __init__(self, *args, **kwargs):
@@ -93,8 +94,11 @@ class BatchedDataDict(UserDict, Generic[DictT]):
         for k, v in self.data.items():
             if isinstance(v, PackedTensor):
                 multimodal_dict[k] = v.as_tensor(device=device) if as_tensors else v
-            elif k in self.ADDITIONAL_OPTIONAL_KEY_TENSORS:
-                multimodal_dict[k] = v
+            elif k in self.ADDITIONAL_OPTIONAL_KEY_TENSORS and v is not None:
+                if as_tensors and device is not None and isinstance(v, torch.Tensor):
+                    multimodal_dict[k] = v.to(device)
+                else:
+                    multimodal_dict[k] = v
 
         return multimodal_dict
 

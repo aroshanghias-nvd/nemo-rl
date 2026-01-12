@@ -1384,10 +1384,10 @@ class MegatronPolicyWorker(AbstractPolicyWorker, ColocatablePolicyInterface):
                 additional_kwargs["fp32_output"] = False
 
             # TODO(yifu): cleanup. currently needed for nano-v2-vl
-            multimodal_data["images"] = multimodal_data["pixel_values"].to(
-                torch.bfloat16
-            )
-            del multimodal_data["pixel_values"]
+            if "pixel_values" in multimodal_data:
+                multimodal_data["images"] = multimodal_data.pop("pixel_values").to(
+                    torch.bfloat16
+                )
 
             output_tensor = model(
                 input_ids=input_ids_cp_sharded,
@@ -1645,6 +1645,10 @@ class MegatronPolicyWorker(AbstractPolicyWorker, ColocatablePolicyInterface):
             )
             if len(multimodal_data) > 0:
                 position_ids = None
+                if "pixel_values" in multimodal_data:
+                    multimodal_data["images"] = multimodal_data.pop("pixel_values").to(
+                        torch.bfloat16
+                    )
 
             additional_kwargs = {}
             if packed_seq_params is not None:

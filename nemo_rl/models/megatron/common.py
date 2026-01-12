@@ -472,8 +472,8 @@ def forward_step_arbitrary_loss(
         additional_kwargs["fp32_output"] = False
 
     with straggler_timer:
-        multimodal_data["images"] = multimodal_data["pixel_values"].to(torch.bfloat16)
-        del multimodal_data["pixel_values"]
+        if "pixel_values" in multimodal_data:
+            multimodal_data["images"] = multimodal_data.pop("pixel_values").to(torch.bfloat16)
         output_tensor = model(
             input_ids=input_ids_cp_sharded,
             position_ids=position_ids,

@@ -5,16 +5,21 @@
 	shallow = true
 [submodule "3rdparty/Megatron-Bridge"]
 	path = 3rdparty/Megatron-Bridge-workspace/Megatron-Bridge
-	url = https://gitlab-master.nvidia.com/chcui/Megatron-Bridge.git
-	branch = chcui/nano-v3-vl
+	url = https://gitlab-master.nvidia.com/jseppanen/Megatron-Bridge.git
+	branch = jseppanen/nano-v3-vl
 	shallow = true
 [submodule "3rdparty/Automodel-workspace/Automodel"]
 	path = 3rdparty/Automodel-workspace/Automodel
-	url = https://github.com/NVIDIA-NeMo/Automodel.git
-	branch = yifu/bump-torch-and-hf
+	url = https://gitlab-master.nvidia.com/jseppanen/Automodel.git
+	branch = jseppanen/nano-v3-vl
 	shallow = true
 [submodule "3rdparty/Gym-workspace/Gym"]
 	path = 3rdparty/Gym-workspace/Gym
 	url = https://github.com/NVIDIA-NeMo/Gym.git
 	branch = main
+	shallow = true
+[submodule "3rdparty/vllm"]
+	path = 3rdparty/vllm
+	url = https://github.com/netanel-haber/vllm.git
+	branch = dynres
 	shallow = true

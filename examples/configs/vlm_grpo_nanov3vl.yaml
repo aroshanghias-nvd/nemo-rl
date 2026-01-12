@@ -1,4 +1,7 @@
-# TORCH_CUDA_ARCH_LIST="9.0 10.0" NRL_FORCE_REBUILD_VENVS=true uv run examples/run_vlm_grpo.py --config examples/configs/vlm_grpo_nanov3vl.yaml
+# Memory-optimized config for 1 node (8 GPUs × 80GB)
+# TP=1, EP=4 gives DP=2 for optimizer sharding: ~72 GB/rank
+#
+# VLLM_PRECOMPILED_WHEEL_LOCATION=https://wheels.vllm.ai/855b101d75d2fc1fa02a47a6fcfa4053e8541cf0/vllm-0.13.0rc2.dev159%2Bg855b101d7-cp38-abi3-manylinux_2_31_x86_64.whl TORCH_CUDA_ARCH_LIST="9.0 10.0" NRL_FORCE_REBUILD_VENVS=true uv run examples/run_vlm_grpo.py --config examples/configs/vlm_grpo_nanov3vl.yaml
 
 defaults: vlm_grpo_3B.yaml
 checkpointing:
@@ -22,13 +25,26 @@ policy:
     vllm_cfg:
       tensor_parallel_size: 1
       gpu_memory_utilization: 0.9
+    vllm_kwargs:
+      skip_mm_profiling: true
+      # mm_processor_kwargs:
+      #   max_num_patches: 4096
   megatron_cfg:
     enabled: true
-    tensor_model_parallel_size: 2
+    # TP=1, EP=4 → DP=2 (allows optimizer sharding)
+    # 128 experts / EP 4 = 32 experts per rank
+    tensor_model_parallel_size: 1
+    expert_model_parallel_size: 4
+    expert_tensor_parallel_size: 1
+    activation_checkpointing: true
     bias_activation_fusion: false
+    radio_force_cpe_eval_mode: true
     optimizer:
       lr: 5.0e-07
       min_lr: 5.0e-08
+      use_distributed_optimizer: true
+      optimizer_cpu_offload: true
+      optimizer_offload_fraction: 1.0
     scheduler:
       lr_warmup_iters: 50
       lr_warmup_init: 5.0e-08
