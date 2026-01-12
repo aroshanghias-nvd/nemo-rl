@@ -1,6 +1,7 @@
 # Memory-optimized config for 1 node (8 GPUs × 80GB)
 # TP=1, EP=4 gives DP=2 for optimizer sharding: ~72 GB/rank
 #
+# uv pip install setuptools-scm
 # VLLM_PRECOMPILED_WHEEL_LOCATION=https://wheels.vllm.ai/855b101d75d2fc1fa02a47a6fcfa4053e8541cf0/vllm-0.13.0rc2.dev159%2Bg855b101d7-cp38-abi3-manylinux_2_31_x86_64.whl TORCH_CUDA_ARCH_LIST="9.0 10.0" NRL_FORCE_REBUILD_VENVS=true uv run examples/run_vlm_grpo.py --config examples/configs/vlm_grpo_nanov3vl.yaml
 
 defaults: vlm_grpo_3B.yaml
@@ -10,6 +11,8 @@ checkpointing:
 cluster:
   gpus_per_node: 8
   num_nodes: 1
+loss_fn:
+  reference_policy_kl_penalty: 0.0  # save memory in interactive use on one node
 policy:
   max_total_sequence_length: 3072
   dtensor_cfg:
