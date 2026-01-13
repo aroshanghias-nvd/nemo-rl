@@ -76,7 +76,7 @@ class BatchedDataDict(UserDict, Generic[DictT]):
     # keys that are model specific, but not part of the PackedTensor
     ADDITIONAL_OPTIONAL_KEY_TENSORS = [
         "token_type_ids",  # specific to gemma3 that tells where the image tokens are in the sequence, not required for llm-only inference/training
-        "imgs_sizes",  # for dynamic resolution VLMs: tensor of shape [num_images, 2] with (H, W) per image
+        "imgs_sizes",  # for dynamic resolution VLMs: [num_images, 2] with (H, W) per image
     ]
 
     def __init__(self, *args, **kwargs):

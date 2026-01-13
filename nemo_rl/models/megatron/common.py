@@ -36,6 +36,10 @@ from megatron.training.utils import get_ltor_masks_and_position_ids
 from nemo_rl.algorithms.loss_functions import LossFunction, SequencePackingLossWrapper
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 from nemo_rl.distributed.model_utils import _get_tokens_on_this_cp_rank
+from nemo_rl.models.megatron.multimodal import (
+    prepare_multimodal_data,
+    prepare_multimodal_tokens,
+)
 
 
 def _round_up_to_multiple(value: int, multiple: int) -> int:
@@ -401,6 +405,9 @@ def forward_step_arbitrary_loss(
 
     with straggler_timer(bdata=True):
         data_dict = next(data_iterator).to("cuda")
+
+        prepare_multimodal_tokens(data_dict, model)
+
         input_ids = data_dict["input_ids"]
         attention_mask = None
         position_ids = None
@@ -472,8 +479,7 @@ def forward_step_arbitrary_loss(
         additional_kwargs["fp32_output"] = False
 
     with straggler_timer:
-        if "pixel_values" in multimodal_data:
-            multimodal_data["images"] = multimodal_data.pop("pixel_values").to(torch.bfloat16)
+        prepare_multimodal_data(multimodal_data, model)
         output_tensor = model(
             input_ids=input_ids_cp_sharded,
             position_ids=position_ids,

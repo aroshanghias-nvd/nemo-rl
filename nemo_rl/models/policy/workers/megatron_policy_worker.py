@@ -120,6 +120,10 @@ from nemo_rl.models.megatron.common import (
     forward_step_arbitrary_loss,
     get_moe_metrics,
 )
+from nemo_rl.models.megatron.multimodal import (
+    prepare_multimodal_data,
+    prepare_multimodal_tokens,
+)
 from nemo_rl.models.megatron.community_import import import_model_from_hf_name
 from nemo_rl.models.policy import PolicyConfig
 from nemo_rl.models.policy.interfaces import (
@@ -1333,6 +1337,9 @@ class MegatronPolicyWorker(AbstractPolicyWorker, ColocatablePolicyInterface):
         ):
             nonlocal pad_full_seq_to, pad_packed_seq_to_multiple_of, pad_factor
             data_dict = next(data_iterator).to("cuda")
+
+            prepare_multimodal_tokens(data_dict, model)
+
             if self.cfg["sequence_packing"]["enabled"]:
                 original_seq_length = data_dict["input_ids"].shape[1]
                 cp_size = self.cfg["megatron_cfg"]["context_parallel_size"]
@@ -1383,11 +1390,7 @@ class MegatronPolicyWorker(AbstractPolicyWorker, ColocatablePolicyInterface):
             if self.defer_fp32_logits:
                 additional_kwargs["fp32_output"] = False
 
-            # TODO(yifu): cleanup. currently needed for nano-v2-vl
-            if "pixel_values" in multimodal_data:
-                multimodal_data["images"] = multimodal_data.pop("pixel_values").to(
-                    torch.bfloat16
-                )
+            prepare_multimodal_data(multimodal_data, model)
 
             output_tensor = model(
                 input_ids=input_ids_cp_sharded,
@@ -1603,6 +1606,8 @@ class MegatronPolicyWorker(AbstractPolicyWorker, ColocatablePolicyInterface):
             nonlocal pad_full_seq_to, pad_packed_seq_to_multiple_of, pad_factor
             data_dict = next(data_iterator).to("cuda")
 
+            prepare_multimodal_tokens(data_dict, model)
+
             pack = self.cfg["sequence_packing"]["enabled"]
             if pack:
                 original_seq_length = data_dict["input_ids"].shape[1]
@@ -1645,10 +1650,7 @@ class MegatronPolicyWorker(AbstractPolicyWorker, ColocatablePolicyInterface):
             )
             if len(multimodal_data) > 0:
                 position_ids = None
-                if "pixel_values" in multimodal_data:
-                    multimodal_data["images"] = multimodal_data.pop("pixel_values").to(
-                        torch.bfloat16
-                    )
+            prepare_multimodal_data(multimodal_data, model)
 
             additional_kwargs = {}
             if packed_seq_params is not None:

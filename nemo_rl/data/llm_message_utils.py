@@ -630,6 +630,7 @@ def get_formatted_message_log(
                     new_message[key] = PackedTensor(processed_chunk[key], dim_to_pack=0)
 
             # compute imgs_sizes for dynamic resolution from pixel_values shape
+            # Store as PackedTensor so slicing by sample index stays aligned with pixel_values
             if "pixel_values" in processed_chunk:
                 pv = processed_chunk["pixel_values"]
                 if pv.dim() == 4:
@@ -648,7 +649,7 @@ def get_formatted_message_log(
                     # Fallback for other formats
                     imgs_sizes = None
                 if imgs_sizes is not None:
-                    new_message["imgs_sizes"] = imgs_sizes
+                    new_message["imgs_sizes"] = PackedTensor(imgs_sizes, dim_to_pack=0)
 
         if len(new_message["token_ids"]) == 0:
             # if there is an empty message, the empty `token_ids` tensor ends up being in fp32,

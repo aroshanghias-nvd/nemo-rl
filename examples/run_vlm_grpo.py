@@ -52,6 +52,7 @@ from nemo_rl.data.multimodal_utils import (
 from nemo_rl.distributed.ray_actor_environment_registry import (
     get_actor_python_env,
 )
+from nemo_rl.models.megatron.multimodal import adjust_image_tokens
 from nemo_rl.distributed.virtual_cluster import init_ray
 from nemo_rl.environments.interfaces import EnvironmentInterface
 from nemo_rl.environments.vlm_environment import VLMEnvironment
@@ -78,117 +79,6 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
 # ===============================================================================
 #                             VLM Data Processor
 # ===============================================================================
-
-
-def adjust_image_tokens(
-    input_ids,
-    num_tiles,
-    img_start_token_id,
-    img_end_token_id,
-):
-    """Ensures the input_ids tensor contains the correct number of <image> tokens as specified by num_tiles.
-
-    This adjustment is necessary to bridge the gap between from HF processor to Megatron LLaVAModel.
-
-    Example:
-        input_ids decoded may look like this
-        System: ...
-        User:...
-        Image 1: <img><image>...<image></img>  # adjust number of <image> tokens to be num_tiles[0]
-        Image 2: <img><image>...<image></img>  # adjust number of <image> tokens to be num_tiles[1]
-        ...
-        etc
-    Args:
-        input_ids: The input_ids tensor (output of HF processor)
-            or a dictionary of tensors, one of the keys of which must be "input_ids",
-            and other tensors must have the same shape as input_ids
-        num_tiles: The number of <image> tokens to ensure, either a single int or a list of ints
-        img_start_token_id: The token id of <img>
-        img_end_token_id: The token id of </img>
-    Returns:
-        The input_ids tensor with the correct number of <image> tokens
-        or a dictionary of tensors each with the same shape as input_ids
-    """
-    if isinstance(num_tiles, int):
-        num_tiles = [num_tiles]
-    if isinstance(input_ids, dict):
-        assert "input_ids" in input_ids, (
-            "input_ids must be a dictionary with 'input_ids' as one of the keys"
-        )
-        other_tensors = {
-            key: value for key, value in input_ids.items() if key != "input_ids"
-        }
-        input_ids = input_ids["input_ids"]
-    else:
-        other_tensors = None
-
-    for i, num_tile in enumerate(num_tiles):
-        image_start_pos = (
-            (input_ids[0] == img_start_token_id).nonzero(as_tuple=True)[0][i].item()
-        )
-        image_end_pos = (
-            (input_ids[0] == img_end_token_id).nonzero(as_tuple=True)[0][i].item()
-        )
-        media_token_id = input_ids[
-            0, image_start_pos + 1
-        ]  # this can be <image> or <video> token
-        existing = image_end_pos - image_start_pos + 1
-
-        if num_tile > existing:
-            # Need to add tokens
-            repeat = num_tile + 2 - existing  # +2 for <img> and </img> tokens
-            repeat_tokens = torch.full(
-                (1, repeat),
-                media_token_id,
-                dtype=input_ids.dtype,
-                device=input_ids.device,
-            )
-            if other_tensors is not None:
-                for key, tensor in other_tensors.items():
-                    assert other_tensors[key].shape == input_ids.shape, (
-                        f"Tensor {key} has shape {other_tensors[key].shape} but input_ids has shape {input_ids.shape}"
-                    )
-                    other_tensors[key] = torch.cat(
-                        [
-                            tensor[:, : image_start_pos + 1],
-                            repeat_tokens,
-                            tensor[:, image_start_pos + 1 :],
-                        ],
-                        dim=1,
-                    )
-            input_ids = torch.cat(
-                [
-                    input_ids[:, : image_start_pos + 1],
-                    repeat_tokens,
-                    input_ids[:, image_start_pos + 1 :],
-                ],
-                dim=1,
-            )
-
-        elif num_tile < existing:
-            # Need to remove tokens (keep only the first `num_tile` occurrences)
-            keep_tokens_mask = torch.ones_like(input_ids, dtype=torch.bool)
-            positions = (
-                input_ids[0][image_start_pos : image_end_pos + 1] == media_token_id
-            ).nonzero(as_tuple=True)[0] + image_start_pos
-            # positions to drop are after the first num_tile occurrences
-            drop_positions = positions[num_tile:].tolist()
-            keep_tokens_mask[0, drop_positions] = False
-            if other_tensors is not None:
-                for key, tensor in other_tensors.items():
-                    assert other_tensors[key].shape == input_ids.shape, (
-                        f"Tensor {key} has shape {other_tensors[key].shape} but input_ids has shape {input_ids.shape}"
-                    )
-                    other_tensors[key] = tensor[keep_tokens_mask].unsqueeze(0)
-            input_ids = input_ids[keep_tokens_mask].unsqueeze(0)
-
-    if other_tensors is not None:
-        return {
-            "input_ids": input_ids,
-            **other_tensors,
-        }
-    else:
-        return input_ids
 
 
 def resolve_to_image(image_path_or_image: str | Image.Image) -> Image.Image:
@@ -350,6 +240,7 @@ def hf_data_processor(
             )
 
     # compute imgs_sizes for dynamic resolution from pixel_values shape
+    # Store as PackedTensor so slicing by sample index stays aligned with pixel_values
     if "pixel_values" in message_both:
         pv = message_both["pixel_values"]
         if pv.dim() == 4:
@@ -365,7 +256,7 @@ def hf_data_processor(
         else:
             imgs_sizes = None
         if imgs_sizes is not None:
-            user_message["imgs_sizes"] = imgs_sizes
+            user_message["imgs_sizes"] = PackedTensor(imgs_sizes, dim_to_pack=0)
 
     # specifically for gemma, we need to add token_type_ids to the user message as a sequence-type value
     if "token_type_ids" in message_both:
