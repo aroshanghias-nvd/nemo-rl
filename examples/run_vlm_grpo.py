@@ -349,6 +349,24 @@ def hf_data_processor(
                 message_both[key], dim_to_pack=get_dim_to_pack_along(processor, key)
             )
 
+    # compute imgs_sizes for dynamic resolution from pixel_values shape
+    if "pixel_values" in message_both:
+        pv = message_both["pixel_values"]
+        if pv.dim() == 4:
+            imgs_sizes = torch.tensor(
+                [[pv.shape[2], pv.shape[3]] for _ in range(pv.shape[0])],
+                dtype=torch.int32,
+            )
+        elif pv.dim() == 5:
+            imgs_sizes = torch.tensor(
+                [[pv.shape[3], pv.shape[4]] for _ in range(pv.shape[0] * pv.shape[1])],
+                dtype=torch.int32,
+            )
+        else:
+            imgs_sizes = None
+        if imgs_sizes is not None:
+            user_message["imgs_sizes"] = imgs_sizes
+
     # specifically for gemma, we need to add token_type_ids to the user message as a sequence-type value
     if "token_type_ids" in message_both:
         system_message["token_type_ids"] = message_sys["token_type_ids"][0]
