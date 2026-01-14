@@ -1184,16 +1184,17 @@ class MegatronPolicyWorker(AbstractPolicyWorker, ColocatablePolicyInterface):
 
                 # when freezing sub-models we may have a mixture of successful and unsucessful ranks,
                 # so we must gather across mp ranks
+                mp_group = parallel_state.get_model_parallel_group()
                 update_successful = logical_and_across_model_parallel_group(
-                    update_successful
+                    update_successful, mp_group=mp_group
                 )
                 # grad_norm and num_zeros_in_grad will be None on ranks without trainable params,
                 # so we must gather across mp ranks
                 grad_norm: float = reduce_max_stat_across_model_parallel_group(
-                    grad_norm
+                    grad_norm, mp_group=mp_group
                 )
                 num_zeros_in_grad: float = reduce_max_stat_across_model_parallel_group(
-                    num_zeros_in_grad
+                    num_zeros_in_grad, mp_group=mp_group
                 )
 
                 if update_successful:
