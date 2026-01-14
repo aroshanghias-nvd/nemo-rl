@@ -501,11 +501,11 @@ class BaseVllmGenerationWorker:
 class VllmGenerationWorker(BaseVllmGenerationWorker):
     def _create_engine(self, llm_kwargs: dict[str, Any]) -> None:
         import vllm
-        from nemo_rl.models.generation.vllm import custom_vlm  # vLLM model
-        from nemo_rl.models import nemotron_h_nano_vl  # Huggingface model (for Ray/pickling)
+        # from nemo_rl.models.generation.vllm import custom_vlm  # vLLM model
+        # from nemo_rl.models import nemotron_h_nano_vl  # Huggingface model (for Ray/pickling)
 
-        custom_vlm.register()
-        nemotron_h_nano_vl.register()
+        # custom_vlm.register()
+        # nemotron_h_nano_vl.register()
         self.llm = vllm.LLM(**llm_kwargs)
 
     def post_init(self):
