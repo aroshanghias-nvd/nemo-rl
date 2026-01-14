@@ -2348,6 +2348,9 @@ def async_grpo_train(
                             "sample_mask": repeated_batch["loss_multiplier"],
                         }
                     )
+                    train_data.update(
+                        flat_messages.get_multimodal_dict(as_tensors=False)
+                    )
                     train_data.to("cpu")
 
                 # Training phase (same as sync version)

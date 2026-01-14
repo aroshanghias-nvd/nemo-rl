@@ -174,6 +174,8 @@ def process_images_for_dynamic_resolution(
     For dynamic resolution, RADIO vision model expects pre-patchified images.
     This converts from [N, C, H, W] to [1, total_patches, C*patch_dim*patch_dim].
 
+    Images may be padded to uniform size; imgs_sizes contains actual (H, W) per image.
+
     Returns:
         patchified_images: [1, total_patches, patch_features] packed patches
         imgs_sizes: [N, 2] image sizes (H, W) in pixels (unchanged)
@@ -189,7 +191,11 @@ def process_images_for_dynamic_resolution(
             py=py, yy=patch_dim, px=px, xx=patch_dim,
         )
 
-    patches_list = [rearrange_img(img) for img in images]
+    patches_list = []
+    for i, img in enumerate(images):
+        h, w = imgs_sizes[i].tolist()
+        cropped = img[:, :h, :w]
+        patches_list.append(rearrange_img(cropped))
 
     current_length = 0
     max_length = 0
@@ -245,6 +251,14 @@ def prepare_multimodal_data(multimodal_data: dict, model) -> None:
     Modifies multimodal_data in place.
     """
     if "pixel_values" not in multimodal_data:
+        inner_model = model
+        while hasattr(inner_model, 'module'):
+            inner_model = inner_model.module
+        if hasattr(inner_model, 'llava_model'):
+            raise ValueError(
+                f"VLM model requires pixel_values but multimodal_data only has keys: {list(multimodal_data.keys())}. "
+                "Check that your data includes images and that PackedTensor is preserved through batching."
+            )
         return
 
     images = multimodal_data.pop("pixel_values").to(torch.bfloat16)

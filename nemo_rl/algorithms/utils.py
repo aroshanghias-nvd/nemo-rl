@@ -277,6 +277,26 @@ def get_tokenizer(
 
             processor_config = AutoConfig.from_pretrained(tokenizer_config["name"], trust_remote_code=True)
             processor = InternVLProcessor(processor, processor_config)
+        elif hasattr(processor, "tokenizer"):
+            # Check for dynamic resolution models (e.g., Nano v3 VL)
+            # These need custom processing to bypass HF's static tiling
+            from transformers import AutoConfig
+
+            from nemo_rl.models.nano_v3_vl import (
+                DynamicResolutionProcessor,
+                is_dynamic_resolution_model,
+            )
+
+            processor_config = AutoConfig.from_pretrained(
+                tokenizer_config["name"], trust_remote_code=True
+            )
+            if is_dynamic_resolution_model(processor_config):
+                print(
+                    "Using DynamicResolutionProcessor (bypassing HF static tiling)"
+                )
+                processor = DynamicResolutionProcessor(
+                    processor.tokenizer, processor_config
+                )
         tokenizer = processor.tokenizer
     else:
         tokenizer = AutoTokenizer.from_pretrained(
