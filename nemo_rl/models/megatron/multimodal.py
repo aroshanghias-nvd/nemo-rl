@@ -19,254 +19,153 @@ from einops import rearrange
 from megatron.core.packed_seq_params import PackedSeqParams
 
 
-def adjust_image_tokens(
-    input_ids: torch.Tensor,
-    num_tiles: int | list[int],
-    img_start_token_id: int,
-    img_end_token_id: int,
-) -> torch.Tensor:
-    """Ensures the input_ids tensor contains the correct number of <image> tokens as specified by num_tiles.
+def collapse_multimodal_tokens(data_dict: dict, model) -> tuple[dict, dict]:
+    """Collapse N image tokens to 1 token per image for Megatron LLaVA forward pass.
 
-    This adjustment is necessary to bridge the gap between from HF processor to Megatron LLaVAModel.
+    vLLM uses N tokens per image (1:1 token-to-embedding), while Megatron uses 1 token
+    per image (1:N via imgs_sizes). This collapses <img><image>×N</img> to <img><image></img>.
 
-    Example:
-        input_ids decoded may look like this
-        System: ...
-        User:...
-        Image 1: <img><image>...<image></img>  # adjust number of <image> tokens to be num_tiles[0]
-        Image 2: <img><image>...<image></img>  # adjust number of <image> tokens to be num_tiles[1]
-        ...
-        etc
-    Args:
-        input_ids: The input_ids tensor (output of HF processor) with shape [batch, seq]
-        num_tiles: The number of <image> tokens to ensure, either a single int or a list of ints
-        img_start_token_id: The token id of <img>
-        img_end_token_id: The token id of </img>
-    Returns:
-        The input_ids tensor with the correct number of <image> tokens
+    Returns (data_dict, metadata) where metadata contains info needed to expand back.
     """
-    if isinstance(num_tiles, int):
-        num_tiles = [num_tiles]
+    image_token_ids = _get_image_token_ids(model)
+    if image_token_ids is None or "pixel_values" not in data_dict:
+        return data_dict, {}
 
-    for i, num_tile in enumerate(num_tiles):
-        image_start_pos = (
-            (input_ids[0] == img_start_token_id).nonzero(as_tuple=True)[0][i].item()
-        )
-        image_end_pos = (
-            (input_ids[0] == img_end_token_id).nonzero(as_tuple=True)[0][i].item()
-        )
-        media_token_id = input_ids[0, image_start_pos + 1]
-        existing = image_end_pos - image_start_pos + 1
-
-        if num_tile > existing:
-            repeat = num_tile + 2 - existing
-            repeat_tokens = torch.full(
-                (1, repeat), media_token_id, dtype=input_ids.dtype, device=input_ids.device
-            )
-            input_ids = torch.cat(
-                [input_ids[:, :image_start_pos + 1], repeat_tokens, input_ids[:, image_start_pos + 1:]],
-                dim=1,
-            )
-        elif num_tile < existing:
-            keep_tokens_mask = torch.ones_like(input_ids, dtype=torch.bool)
-            positions = (
-                input_ids[0][image_start_pos:image_end_pos + 1] == media_token_id
-            ).nonzero(as_tuple=True)[0] + image_start_pos
-            drop_positions = positions[num_tile:].tolist()
-            keep_tokens_mask[0, drop_positions] = False
-            input_ids = input_ids[keep_tokens_mask].unsqueeze(0)
-
-    return input_ids
-
-
-def collapse_image_tokens_for_megatron(
-    input_ids: torch.Tensor,
-    img_start_token_id: int,
-    img_end_token_id: int,
-    pad_token_id: int = 0,
-    input_lengths: Optional[torch.Tensor] = None,
-) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
-    """Collapse expanded image tokens to single tokens per image for Megatron LLaVA.
-
-    HF processors expand <image> to multiple tokens (one per tile), but Megatron
-    expects exactly ONE <image> token per image, using num_image_tiles for tile counts.
-    """
+    input_ids = data_dict["input_ids"]
+    input_lengths = data_dict.get("input_lengths")
+    img_start_id, img_end_id = image_token_ids
     batch_size = input_ids.shape[0]
+    original_seq_len = input_ids.shape[1]
+
+    keep_masks = []
     collapsed_list = []
     new_lengths = []
 
     for b in range(batch_size):
-        sample_ids = input_ids[b]
-        if input_lengths is not None:
-            valid_len = input_lengths[b].item()
-            sample_ids = sample_ids[:valid_len]
+        valid_len = input_lengths[b].item() if input_lengths is not None else input_ids.shape[1]
+        sample = input_ids[b, :valid_len]
 
-        num_images = (sample_ids == img_start_token_id).sum().item()
-        num_tiles = [1] * num_images
-        collapsed = adjust_image_tokens(
-            sample_ids.unsqueeze(0), num_tiles, img_start_token_id, img_end_token_id
-        )[0]
-        collapsed_list.append(collapsed)
-        new_lengths.append(collapsed.shape[0])
+        keep_mask = torch.ones(valid_len, dtype=torch.bool, device=input_ids.device)
+        for start_pos in (sample == img_start_id).nonzero(as_tuple=True)[0]:
+            end_pos = (sample[start_pos:] == img_end_id).nonzero(as_tuple=True)[0][0] + start_pos
+            keep_mask[start_pos + 2 : end_pos] = False
 
-    max_len = max(c.shape[0] for c in collapsed_list)
-    padded = torch.full(
-        (batch_size, max_len), pad_token_id, dtype=input_ids.dtype, device=input_ids.device
+        keep_masks.append(keep_mask)
+        collapsed_list.append(sample[keep_mask])
+        new_lengths.append(keep_mask.sum().item())
+
+    max_collapsed_len = max(new_lengths)
+    collapsed_ids = torch.zeros(
+        batch_size, max_collapsed_len, dtype=input_ids.dtype, device=input_ids.device
     )
     for b, collapsed in enumerate(collapsed_list):
-        padded[b, :collapsed.shape[0]] = collapsed
+        collapsed_ids[b, : len(collapsed)] = collapsed
 
-    updated_lengths = None
+    new_data_dict = data_dict.copy()
+    new_data_dict["input_ids"] = collapsed_ids
     if input_lengths is not None:
-        updated_lengths = torch.tensor(new_lengths, dtype=input_lengths.dtype, device=input_lengths.device)
-
-    return padded, updated_lengths
-
-
-def get_image_token_ids_from_model(model) -> Optional[tuple[int, int]]:
-    """Extract <img> and </img> token IDs from Megatron model."""
-    inner_model = model
-    while hasattr(inner_model, 'module'):
-        inner_model = inner_model.module
-
-    has_llava = hasattr(inner_model, 'llava_model')
-    if has_llava:
-        inner_model = inner_model.llava_model
-
-    img_start = getattr(inner_model, 'img_start_token_id', None)
-    img_end = getattr(inner_model, 'img_end_token_id', None)
-    if img_start is not None and img_end is not None:
-        return img_start, img_end
-
-    if hasattr(inner_model, 'config'):
-        config = inner_model.config
-        img_start = getattr(config, 'img_start_token_id', None)
-        img_end = getattr(config, 'img_end_token_id', None)
-        if img_start is not None and img_end is not None:
-            return img_start, img_end
-
-    raise ValueError("No image token IDs found in model")
-
-
-def prepare_multimodal_tokens(data_dict: dict, model) -> None:
-    """Collapse expanded image tokens in data_dict if model is a VLM. Modifies data_dict in place."""
-    image_token_ids = get_image_token_ids_from_model(model)
-    if image_token_ids is None or "pixel_values" not in data_dict:
-        return
-
-    img_start_id, img_end_id = image_token_ids
-    collapsed_ids, collapsed_lengths = collapse_image_tokens_for_megatron(
-        data_dict["input_ids"], img_start_id, img_end_id,
-        input_lengths=data_dict.get("input_lengths"),
-    )
-    data_dict["input_ids"] = collapsed_ids
-    if collapsed_lengths is not None:
-        data_dict["input_lengths"] = collapsed_lengths
-
-
-def process_images_for_dynamic_resolution(
-    images: torch.Tensor,
-    imgs_sizes: torch.Tensor,
-    patch_dim: int,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, PackedSeqParams]:
-    """Patchify images for dynamic resolution VLMs.
-
-    For dynamic resolution, RADIO vision model expects pre-patchified images.
-    This converts from [N, C, H, W] to [1, total_patches, C*patch_dim*patch_dim].
-
-    Images may be padded to uniform size; imgs_sizes contains actual (H, W) per image.
-
-    Returns:
-        patchified_images: [1, total_patches, patch_features] packed patches
-        imgs_sizes: [N, 2] image sizes (H, W) in pixels (unchanged)
-        num_image_tiles: [N] tile count per image (1 for pure dynamic res)
-        vision_packed_seq_params: PackedSeqParams for packed attention
-    """
-
-    def rearrange_img(x):
-        py = x.shape[-2] // patch_dim
-        px = x.shape[-1] // patch_dim
-        return rearrange(
-            x, 'c (py yy) (px xx) -> (py px) (c yy xx)',
-            py=py, yy=patch_dim, px=px, xx=patch_dim,
+        new_data_dict["input_lengths"] = torch.tensor(
+            new_lengths, dtype=input_lengths.dtype, device=input_lengths.device
         )
 
-    patches_list = []
-    for i, img in enumerate(images):
-        h, w = imgs_sizes[i].tolist()
-        cropped = img[:, :h, :w]
-        patches_list.append(rearrange_img(cropped))
+    mm_metadata = {
+        "original_seq_len": original_seq_len,
+        "batch_size": batch_size,
+        "keep_masks": keep_masks,
+    }
+    return new_data_dict, mm_metadata
 
-    current_length = 0
-    max_length = 0
-    vision_cu_lengths = [0]
-    for patch in patches_list:
-        seq_len = patch.shape[0]
-        if max_length < seq_len:
-            max_length = seq_len
-        current_length += seq_len
-        vision_cu_lengths.append(current_length)
 
-    vision_cu_lengths = torch.tensor(vision_cu_lengths, dtype=torch.int32, device=images.device)
-    vision_max_lengths = torch.tensor(max_length, dtype=torch.int32, device=images.device)
-
-    # num_image_tiles = 1 per image for pure dynamic resolution (no tiling).
-    # This matches SFT semantics where num_image_tiles counts tiles, not patches.
-    # The model uses imgs_sizes to derive patch grid dimensions internally.
-    num_image_tiles = torch.ones(len(images), dtype=torch.int, device=images.device)
-
-    patchified_images = torch.cat(patches_list, dim=0).unsqueeze(0)
-
-    vision_packed_seq_params = PackedSeqParams(
-        qkv_format='thd',
-        cu_seqlens_q=vision_cu_lengths,
-        cu_seqlens_kv=vision_cu_lengths,
-        max_seqlen_q=vision_max_lengths,
-        max_seqlen_kv=vision_max_lengths,
+def expand_multimodal_tokens(tensor: torch.Tensor, mm_metadata: dict) -> torch.Tensor:
+    """Expand collapsed tensor back to original sequence length (inverse of collapse)."""
+    if not mm_metadata:
+        return tensor
+    original_seq_len = mm_metadata["original_seq_len"]
+    batch_size = mm_metadata["batch_size"]
+    keep_masks = mm_metadata["keep_masks"]
+    if tensor.shape[1] == original_seq_len:
+        return tensor
+    extra_dims = tensor.shape[2:] if tensor.dim() > 2 else ()
+    result = torch.zeros(
+        batch_size, original_seq_len, *extra_dims, dtype=tensor.dtype, device=tensor.device
     )
+    for b, mask in enumerate(keep_masks):
+        result[b, : len(mask)][mask] = tensor[b, : mask.sum()]
+    return result
 
-    return patchified_images, imgs_sizes, num_image_tiles, vision_packed_seq_params
 
+def _get_image_token_ids(model) -> Optional[tuple[int, int]]:
+    """Extract <img> and </img> token IDs from Megatron model."""
+    inner = model
+    while hasattr(inner, "module"):
+        inner = inner.module
+    if hasattr(inner, "llava_model"):
+        inner = inner.llava_model
 
-def get_model_dynamic_resolution_config(model):
-    """Extract dynamic resolution config from a Megatron model."""
-    inner_model = model
-    while hasattr(inner_model, 'module'):
-        inner_model = inner_model.module
-
-    if hasattr(inner_model, 'llava_model'):
-        inner_model = inner_model.llava_model
-
-    if hasattr(inner_model, '_dynamic_resolution') and hasattr(inner_model, 'vision_model'):
-        patch_dim = getattr(inner_model.vision_model, 'patch_dim', 16)
-        return inner_model._dynamic_resolution, patch_dim
-
-    return False, None
+    for obj in [inner, getattr(inner, "config", None)]:
+        if obj is None:
+            continue
+        start = getattr(obj, "img_start_token_id", None)
+        end = getattr(obj, "img_end_token_id", None)
+        if start is not None and end is not None:
+            return start, end
+    return None
 
 
 def prepare_multimodal_data(multimodal_data: dict, model) -> None:
-    """Prepare multimodal data for Megatron model forward pass.
-
-    Handles pixel_values -> images conversion and patchification for dynamic resolution.
-    Modifies multimodal_data in place.
-    """
+    """Prepare pixel_values for Megatron forward (patchification for dynamic resolution)."""
     if "pixel_values" not in multimodal_data:
-        inner_model = model
-        while hasattr(inner_model, 'module'):
-            inner_model = inner_model.module
-        if hasattr(inner_model, 'llava_model'):
-            raise ValueError(
-                f"VLM model requires pixel_values but multimodal_data only has keys: {list(multimodal_data.keys())}. "
-                "Check that your data includes images and that PackedTensor is preserved through batching."
-            )
         return
 
     images = multimodal_data.pop("pixel_values").to(torch.bfloat16)
-    dynamic_resolution, patch_dim = get_model_dynamic_resolution_config(model)
-    if dynamic_resolution and "imgs_sizes" in multimodal_data:
-        images, _, num_image_tiles, vision_packed_seq_params = process_images_for_dynamic_resolution(
+
+    inner = model
+    while hasattr(inner, "module"):
+        inner = inner.module
+    if hasattr(inner, "llava_model"):
+        inner = inner.llava_model
+
+    dynamic_res = getattr(inner, "_dynamic_resolution", False)
+    if dynamic_res and "imgs_sizes" in multimodal_data:
+        patch_dim = getattr(inner.vision_model, "patch_dim", 16)
+        images, num_tiles, vision_params = _patchify_for_dynamic_resolution(
             images, multimodal_data["imgs_sizes"], patch_dim
         )
-        multimodal_data["num_image_tiles"] = num_image_tiles
-        multimodal_data["vision_packed_seq_params"] = vision_packed_seq_params
+        multimodal_data["num_image_tiles"] = num_tiles
+        multimodal_data["vision_packed_seq_params"] = vision_params
+
     multimodal_data["images"] = images
+
+
+def _patchify_for_dynamic_resolution(
+    images: torch.Tensor,
+    imgs_sizes: torch.Tensor,
+    patch_dim: int,
+) -> tuple[torch.Tensor, torch.Tensor, PackedSeqParams]:
+    """Convert images to packed patches for dynamic resolution RADIO vision encoder."""
+
+    def to_patches(img: torch.Tensor, h: int, w: int) -> torch.Tensor:
+        img = img[:, :h, :w]
+        py, px = h // patch_dim, w // patch_dim
+        return rearrange(
+            img, "c (py yy) (px xx) -> (py px) (c yy xx)", py=py, yy=patch_dim, px=px, xx=patch_dim
+        )
+
+    patches_list = [to_patches(img, *imgs_sizes[i].tolist()) for i, img in enumerate(images)]
+
+    cu_seqlens = [0]
+    for p in patches_list:
+        cu_seqlens.append(cu_seqlens[-1] + p.shape[0])
+
+    max_seqlen = max(p.shape[0] for p in patches_list)
+    return (
+        torch.cat(patches_list, dim=0).unsqueeze(0),
+        torch.ones(len(images), dtype=torch.int, device=images.device),
+        PackedSeqParams(
+            qkv_format="thd",
+            cu_seqlens_q=torch.tensor(cu_seqlens, dtype=torch.int32, device=images.device),
+            cu_seqlens_kv=torch.tensor(cu_seqlens, dtype=torch.int32, device=images.device),
+            max_seqlen_q=torch.tensor(max_seqlen, dtype=torch.int32, device=images.device),
+            max_seqlen_kv=torch.tensor(max_seqlen, dtype=torch.int32, device=images.device),
+        ),
+    )

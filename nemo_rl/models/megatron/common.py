@@ -37,8 +37,9 @@ from nemo_rl.algorithms.loss_functions import LossFunction, SequencePackingLossW
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 from nemo_rl.distributed.model_utils import _get_tokens_on_this_cp_rank
 from nemo_rl.models.megatron.multimodal import (
+    collapse_multimodal_tokens,
+    expand_multimodal_tokens,
     prepare_multimodal_data,
-    prepare_multimodal_tokens,
 )
 
 
@@ -405,8 +406,8 @@ def forward_step_arbitrary_loss(
 
     with straggler_timer(bdata=True):
         data_dict = next(data_iterator).to("cuda")
-
-        prepare_multimodal_tokens(data_dict, model)
+        original_input_ids = data_dict["input_ids"]
+        data_dict, mm_dict = collapse_multimodal_tokens(data_dict, model)
 
         input_ids = data_dict["input_ids"]
         attention_mask = None
@@ -508,7 +509,13 @@ def forward_step_arbitrary_loss(
                 cu_seqlens_q_padded=packed_seq_params.cu_seqlens_q_padded,
             )
 
+        if mm_dict and pack_sequences:
+            raise NotImplementedError(
+                "Sequence packing is not yet supported for multimodal inputs."
+            )
+        output_tensor = expand_multimodal_tokens(output_tensor, mm_dict)
         loss_data = data_dict
+        loss_data["input_ids"] = original_input_ids
 
     loss_fn_wrapped = partial(
         loss_fn,

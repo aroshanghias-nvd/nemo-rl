@@ -121,8 +121,9 @@ from nemo_rl.models.megatron.common import (
     get_moe_metrics,
 )
 from nemo_rl.models.megatron.multimodal import (
+    collapse_multimodal_tokens,
+    expand_multimodal_tokens,
     prepare_multimodal_data,
-    prepare_multimodal_tokens,
 )
 from nemo_rl.models.megatron.community_import import import_model_from_hf_name
 from nemo_rl.models.policy import PolicyConfig
@@ -1337,8 +1338,7 @@ class MegatronPolicyWorker(AbstractPolicyWorker, ColocatablePolicyInterface):
         ):
             nonlocal pad_full_seq_to, pad_packed_seq_to_multiple_of, pad_factor
             data_dict = next(data_iterator).to("cuda")
-
-            prepare_multimodal_tokens(data_dict, model)
+            data_dict, mm_dict = collapse_multimodal_tokens(data_dict, model)
 
             if self.cfg["sequence_packing"]["enabled"]:
                 original_seq_length = data_dict["input_ids"].shape[1]
@@ -1440,6 +1440,7 @@ class MegatronPolicyWorker(AbstractPolicyWorker, ColocatablePolicyInterface):
                 token_logprobs = torch.cat(
                     [torch.zeros_like(token_logprobs[:, :1]), token_logprobs], dim=1
                 )
+                token_logprobs = expand_multimodal_tokens(token_logprobs, mm_dict)
                 return torch.tensor(0.0, device=token_logprobs.device), {
                     "logprobs": token_logprobs
                 }
@@ -1605,8 +1606,7 @@ class MegatronPolicyWorker(AbstractPolicyWorker, ColocatablePolicyInterface):
         ):
             nonlocal pad_full_seq_to, pad_packed_seq_to_multiple_of, pad_factor
             data_dict = next(data_iterator).to("cuda")
-
-            prepare_multimodal_tokens(data_dict, model)
+            data_dict, mm_dict = collapse_multimodal_tokens(data_dict, model)
 
             pack = self.cfg["sequence_packing"]["enabled"]
             if pack:
@@ -1664,6 +1664,7 @@ class MegatronPolicyWorker(AbstractPolicyWorker, ColocatablePolicyInterface):
                 **multimodal_data,
             )
 
+            output_tensor = expand_multimodal_tokens(output_tensor, mm_dict)
             if "generation" in self.cfg and self.cfg["generation"] is not None:
                 output_tensor.div_(self.cfg["generation"]["temperature"])
 

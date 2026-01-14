@@ -26,6 +26,13 @@ from transformers.processing_utils import ProcessorMixin
 # This prevents DecompressionBombWarning for legitimate large images
 Image.MAX_IMAGE_PIXELS = None
 
+# Incoming prompt tags
+IMG_INPUT_TAG = "<image>"
+# Preprocessed prompt placeholders
+IMG_START = "<img>"
+IMG_END = "</img>"
+IMG_CONTEXT = "<image>"
+
 
 def _flatten_images(images):
     """Recursively flatten nested lists of images into a flat list."""
@@ -50,8 +57,9 @@ class DynamicResolutionProcessor(ProcessorMixin):
     This processor:
     - Resizes images to dynamic dimensions (multiples of patch_size)
     - Uses min_num_patches/max_num_patches constraints from config
-    - Emits 1 <image> token per image (not N per tile)
+    - Emits N <image> tokens per image matching vLLM's convention
     - Returns imgs_sizes for variable resolution handling
+    - Megatron collapses N→1 tokens before forward pass
     """
 
     attributes = ["tokenizer"]
@@ -75,14 +83,20 @@ class DynamicResolutionProcessor(ProcessorMixin):
         self.downsample_ratio = getattr(config, "downsample_ratio", 0.5)
         self.pixel_shuffle = getattr(config, "pixel_shuffle", True)
 
-        self.image_token = "<image>"
-        self.start_image_token = "<img>"
-        self.end_image_token = "</img>"
-
         norm_mean = vision_args.get("norm_mean", [0.48145466, 0.4578275, 0.40821073])
         norm_std = vision_args.get("norm_std", [0.26862954, 0.26130258, 0.27577711])
         self.norm_mean = torch.tensor(norm_mean)
         self.norm_std = torch.tensor(norm_std)
+
+    def compute_num_embeddings(self, height: int, width: int) -> int:
+        """Compute number of image embeddings for given dimensions.
+
+        This must match vLLM's DynamicResolutionImageTiler._get_num_embeddings().
+        Formula: (height // patch_size) * (width // patch_size) // downsample_ratio²
+        """
+        reduction_factor = int(1 / self.downsample_ratio)
+        num_patches = (height // self.patch_size) * (width // self.patch_size)
+        return num_patches // (reduction_factor ** 2)
 
     def compute_target_resolution(self, image: Image.Image) -> tuple[int, int]:
         """Compute dynamic target resolution for an image.
@@ -141,6 +155,29 @@ class DynamicResolutionProcessor(ProcessorMixin):
 
         return tensor, (target_h, target_w)
 
+    def _add_image_placeholders(
+        self,
+        text: list[str],
+        imgs_sizes_list: list[list[int]],
+    ) -> list[str]:
+        if len(imgs_sizes_list) == 0:
+            return text
+
+        results_lst = []
+        for t in text:
+            parts = t.split(IMG_INPUT_TAG)
+            assert len(parts) - 1 == len(imgs_sizes_list), (
+                f"Number of {IMG_INPUT_TAG} tokens ({len(parts) - 1}) "
+                f"doesn't match number of images ({len(imgs_sizes_list)})"
+            )
+            result = parts[0]
+            for (h, w), part in zip(imgs_sizes_list, parts[1:]):
+                num_embeddings = self.compute_num_embeddings(h, w)
+                image_placeholder = IMG_START + IMG_CONTEXT * num_embeddings + IMG_END
+                result += image_placeholder + part
+            results_lst.append(result)
+        return results_lst
+
     def __call__(
         self,
         images: Optional[Union[Image.Image, list[Image.Image]]] = None,
@@ -166,17 +203,7 @@ class DynamicResolutionProcessor(ProcessorMixin):
                 pixel_values_list.append(pv)
                 imgs_sizes_list.append([h, w])
 
-        processed_text = []
-        for t in text:
-            new_t = t
-            num_images = len(pixel_values_list)
-            for _ in range(num_images):
-                new_t = new_t.replace(
-                    self.image_token,
-                    f"{self.start_image_token}{self.image_token}{self.end_image_token}",
-                    1,
-                )
-            processed_text.append(new_t)
+        processed_text = self._add_image_placeholders(text, imgs_sizes_list)
 
         text_inputs = self.tokenizer(
             processed_text,
