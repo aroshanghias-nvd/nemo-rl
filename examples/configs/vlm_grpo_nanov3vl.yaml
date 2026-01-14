@@ -1,8 +1,5 @@
-# Memory-optimized config for 1 node (8 GPUs × 80GB)
-# TP=1, EP=4 gives DP=2 for optimizer sharding: ~72 GB/rank
-#
 # uv pip install setuptools-scm
-# VLLM_PRECOMPILED_WHEEL_LOCATION=https://wheels.vllm.ai/855b101d75d2fc1fa02a47a6fcfa4053e8541cf0/vllm-0.13.0rc2.dev159%2Bg855b101d7-cp38-abi3-manylinux_2_31_x86_64.whl TORCH_CUDA_ARCH_LIST="9.0 10.0" NRL_FORCE_REBUILD_VENVS=true uv run examples/run_vlm_grpo.py --config examples/configs/vlm_grpo_nanov3vl.yaml loss_fn.reference_policy_kl_penalty=0
+# VLLM_PRECOMPILED_WHEEL_LOCATION=https://wheels.vllm.ai/855b101d75d2fc1fa02a47a6fcfa4053e8541cf0/vllm-0.13.0rc2.dev159%2Bg855b101d7-cp38-abi3-manylinux_2_31_x86_64.whl TORCH_CUDA_ARCH_LIST="9.0 10.0" NRL_FORCE_REBUILD_VENVS=true uv run examples/run_vlm_grpo.py --config examples/configs/vlm_grpo_nanov3vl.yaml
 
 defaults: vlm_grpo_3B.yaml
 data:
@@ -20,24 +17,24 @@ policy:
   dynamic_batching:
     enabled: false
   make_sequence_length_divisible_by: ${policy.megatron_cfg.tensor_model_parallel_size}
-  model_name: "/lustre/fsw/portfolios/llmservice/users/kchumachenko/workspace/output/sft_moe_rl_llm_eval_mode_radio_v4_two_epochs_bs_x2_1212_matthieul/checkpoints/tp_1/check_hf_2/mcore_to_hf"
+  # model_name: "/lustre/fsw/portfolios/llmservice/users/kchumachenko/workspace/output/sft_moe_rl_llm_eval_mode_radio_v4_two_epochs_bs_x2_1212_matthieul/checkpoints/tp_1/check_hf_2/mcore_to_hf"
+  model_name: "/lustre/fsw/portfolios/llmservice/users/jseppanen/checkpoints/nanov3vl_trunc"
   optimizer: null
   sequence_packing:
     enabled: false
+  logprob_batch_size: 1  # Dynamic resolution only works for mbz=1
   generation:
     vllm_cfg:
       tensor_parallel_size: 1
-      gpu_memory_utilization: 0.9
+      gpu_memory_utilization: 0.6
     vllm_kwargs:
       skip_mm_profiling: true
       # mm_processor_kwargs:
       #   max_num_patches: 4096
   megatron_cfg:
     enabled: true
-    # TP=1, EP=4 → DP=2 (allows optimizer sharding)
-    # 128 experts / EP 4 = 32 experts per rank
     tensor_model_parallel_size: 1
-    expert_model_parallel_size: 4
+    expert_model_parallel_size: 1
     expert_tensor_parallel_size: 1
     activation_checkpointing: true
     bias_activation_fusion: false
