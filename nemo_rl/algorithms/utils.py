@@ -295,7 +295,9 @@ def get_tokenizer(
                     "Using DynamicResolutionProcessor (bypassing HF static tiling)"
                 )
                 processor = DynamicResolutionProcessor(
-                    processor.tokenizer, processor_config
+                    processor.tokenizer,
+                    processor_config,
+                    chat_template=processor.tokenizer.chat_template,
                 )
         tokenizer = processor.tokenizer
     else:
@@ -329,6 +331,8 @@ def get_tokenizer(
             set_chat_template(tokenizer_config["chat_template"])
     else:
         print("No chat template provided, using tokenizer's default")
+        if processor is not None and tokenizer.chat_template:
+            processor.chat_template = tokenizer.chat_template
 
     if (
         "chat_template_kwargs" in tokenizer_config
