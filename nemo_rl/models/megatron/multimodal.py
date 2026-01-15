@@ -24,6 +24,10 @@ def collapse_multimodal_tokens(data_dict: dict, model) -> dict:
 
     vLLM uses N tokens per image (1:1 token-to-embedding), while Megatron uses 1 token
     per image/tile (1:N via imgs_sizes). This collapses <img><image>×N</img> to <img><image></img>.
+
+    Processes the full padded sequence (not just valid content) so that after model forward,
+    output length matches padded input length. Padding tokens (zeros) won't match image token
+    IDs, so only content region gets collapsed while padding is preserved.
     """
     image_token_ids = _get_image_token_ids(model)
     if image_token_ids is None or "pixel_values" not in data_dict:
@@ -34,22 +38,32 @@ def collapse_multimodal_tokens(data_dict: dict, model) -> dict:
     img_start_id, img_end_id = image_token_ids
     batch_size = input_ids.shape[0]
 
+    original_seq_len = input_ids.shape[1]
+    has_imgs_sizes = "imgs_sizes" in data_dict
+
     collapsed_list = []
     new_lengths = []
+    tokens_removed_per_sample = []
 
     for b in range(batch_size):
-        valid_len = input_lengths[b].item() if input_lengths is not None else input_ids.shape[1]
-        sample = input_ids[b, :valid_len]
+        # Process full padded sequence, not just valid content
+        # Padding tokens (zeros) won't match image token IDs, so only content gets collapsed
+        sample = input_ids[b]
+        full_len = sample.shape[0]
+        valid_len = input_lengths[b].item() if input_lengths is not None else full_len
 
-        keep_mask = torch.ones(valid_len, dtype=torch.bool, device=input_ids.device)
+        keep_mask = torch.ones(full_len, dtype=torch.bool, device=input_ids.device)
         for start_pos in (sample == img_start_id).nonzero(as_tuple=True)[0]:
             end_pos = (sample[start_pos:] == img_end_id).nonzero(as_tuple=True)[0][0] + start_pos
             keep_mask[start_pos + 2 : end_pos] = False
 
         collapsed_list.append(sample[keep_mask])
-        new_lengths.append(keep_mask.sum().item())
+        tokens_removed = full_len - keep_mask.sum().item()
+        tokens_removed_per_sample.append(tokens_removed)
+        # Actual content length = original content - tokens removed (from content region)
+        new_lengths.append(valid_len - tokens_removed)
 
-    max_collapsed_len = max(new_lengths)
+    max_collapsed_len = max(len(c) for c in collapsed_list)
     collapsed_ids = torch.zeros(
         batch_size, max_collapsed_len, dtype=input_ids.dtype, device=input_ids.device
     )
@@ -98,13 +112,24 @@ def prepare_multimodal_data(multimodal_data: dict, model) -> None:
         inner = inner.llava_model
 
     dynamic_res = getattr(inner, "_dynamic_resolution", False)
-    if dynamic_res and "imgs_sizes" in multimodal_data:
+    has_imgs_sizes = "imgs_sizes" in multimodal_data
+    imgs_sizes = multimodal_data.get("imgs_sizes")
+
+    if dynamic_res and has_imgs_sizes:
         patch_dim = getattr(inner.vision_model, "patch_dim", 16)
+        # imgs_sizes contains actual pixel dimensions for cropping
+        # RADIO uses these to compute patch counts for position encoding
+        # LLaVAModel._preprocess_data applies pixel_shuffle reduction internally
         images, num_tiles, vision_params = _patchify_for_dynamic_resolution(
             images, multimodal_data["imgs_sizes"], patch_dim
         )
         multimodal_data["num_image_tiles"] = num_tiles
         multimodal_data["vision_packed_seq_params"] = vision_params
+    elif dynamic_res and not has_imgs_sizes:
+        print(
+            "[prepare_multimodal_data] WARNING: dynamic_resolution=True but imgs_sizes not provided! "
+            "Model output length may not match input length."
+        )
 
     multimodal_data["images"] = images
 

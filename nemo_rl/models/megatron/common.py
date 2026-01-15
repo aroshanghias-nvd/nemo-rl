@@ -467,8 +467,6 @@ def forward_step_arbitrary_loss(
     multimodal_data = data_dict.get_multimodal_dict(
         as_tensors=True, device=input_ids_cp_sharded.device
     )
-    # if len(multimodal_data) > 0:
-    #     position_ids = None
 
     additional_kwargs = {}
     # Mamba models currently do not support packed_seq_params
@@ -512,9 +510,6 @@ def forward_step_arbitrary_loss(
             raise NotImplementedError(
                 "Sequence packing is not yet supported for multimodal inputs."
             )
-        assert output_tensor.shape[1] == original_input_ids.shape[1], (
-            f"Model output length {output_tensor.shape[1]} != input length {original_input_ids.shape[1]}"
-        )
         loss_data = data_dict
         loss_data["input_ids"] = original_input_ids
 

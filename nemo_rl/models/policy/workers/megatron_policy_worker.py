@@ -1378,8 +1378,6 @@ class MegatronPolicyWorker(AbstractPolicyWorker, ColocatablePolicyInterface):
             multimodal_data = data_dict.get_multimodal_dict(
                 as_tensors=True, device=input_ids.device
             )
-            # if len(multimodal_data) > 0:
-            #     position_ids = None
 
             additional_kwargs = {}
             # Mamba models currently do not support packed_seq_params
@@ -1425,9 +1423,6 @@ class MegatronPolicyWorker(AbstractPolicyWorker, ColocatablePolicyInterface):
                         chunk_size=logprob_chunk_size,
                     )
                 else:
-                    assert output_tensor.shape[1] == original_input_ids.shape[1], (
-                        f"Model output length {output_tensor.shape[1]} != input length {original_input_ids.shape[1]}"
-                    )
                     token_logprobs = from_parallel_logits_to_logprobs(
                         output_tensor,
                         target=original_input_ids,

@@ -225,6 +225,10 @@ class DynamicResolutionProcessor(ProcessorMixin):
                 padded_pvs.append(pv)
 
             result["pixel_values"] = torch.stack(padded_pvs)
+            # imgs_sizes: actual pixel dimensions (NOT scaled by downsample_ratio)
+            # RADIO uses imgs_sizes to compute patch counts for position encoding
+            # LLaVAModel._preprocess_data applies pixel_shuffle reduction INTERNALLY
+            # E.g., for 448x640 image: RADIO gets 1120 patches, model reduces to 280 embeddings
             result["imgs_sizes"] = torch.tensor(imgs_sizes_list, dtype=torch.int32)
 
         return result
