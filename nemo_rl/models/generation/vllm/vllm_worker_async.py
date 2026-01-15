@@ -914,6 +914,7 @@ class VllmAsyncGenerationWorker(BaseVllmGenerationWorker):
                 max_tokens=self.cfg["max_new_tokens"],
                 stop_token_ids=self.cfg["stop_token_ids"],
                 stop=final_stop_strings,
+                bad_words=self.cfg.get("bad_words"),
                 include_stop_str_in_output=True,  # returning stop strings like hf
             )
 

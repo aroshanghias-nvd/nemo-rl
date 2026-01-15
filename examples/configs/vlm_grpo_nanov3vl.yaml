@@ -24,6 +24,7 @@ policy:
     enabled: false
   logprob_batch_size: 1  # Dynamic resolution only works for mbz=1
   generation:
+    bad_words: ["<image>", "<img>", "</img>"]
     vllm_cfg:
       tensor_parallel_size: 1
       gpu_memory_utilization: 0.6
