@@ -122,7 +122,6 @@ from nemo_rl.models.megatron.common import (
 )
 from nemo_rl.models.megatron.multimodal import (
     collapse_multimodal_tokens,
-    expand_multimodal_tokens,
     prepare_multimodal_data,
 )
 from nemo_rl.models.megatron.community_import import import_model_from_hf_name
@@ -1339,7 +1338,8 @@ class MegatronPolicyWorker(AbstractPolicyWorker, ColocatablePolicyInterface):
         ):
             nonlocal pad_full_seq_to, pad_packed_seq_to_multiple_of, pad_factor
             data_dict = next(data_iterator).to("cuda")
-            data_dict, mm_dict = collapse_multimodal_tokens(data_dict, model)
+            original_input_ids = data_dict["input_ids"].clone()
+            data_dict = collapse_multimodal_tokens(data_dict, model)
 
             if self.cfg["sequence_packing"]["enabled"]:
                 original_seq_length = data_dict["input_ids"].shape[1]
@@ -1361,7 +1361,6 @@ class MegatronPolicyWorker(AbstractPolicyWorker, ColocatablePolicyInterface):
                     cp_size=cp_size,
                 )
                 attention_mask, position_ids = None, None
-                unpacked_input_ids = data_dict["input_ids"]
             else:
                 input_ids = data_dict["input_ids"]
                 input_ids_cp_sharded = input_ids
@@ -1375,7 +1374,6 @@ class MegatronPolicyWorker(AbstractPolicyWorker, ColocatablePolicyInterface):
                     pad_mask_loss=False,
                 )
                 packed_seq_params = None
-                unpacked_input_ids = input_ids
 
             multimodal_data = data_dict.get_multimodal_dict(
                 as_tensors=True, device=input_ids.device
@@ -1427,9 +1425,12 @@ class MegatronPolicyWorker(AbstractPolicyWorker, ColocatablePolicyInterface):
                         chunk_size=logprob_chunk_size,
                     )
                 else:
+                    assert output_tensor.shape[1] == original_input_ids.shape[1], (
+                        f"Model output length {output_tensor.shape[1]} != input length {original_input_ids.shape[1]}"
+                    )
                     token_logprobs = from_parallel_logits_to_logprobs(
                         output_tensor,
-                        target=unpacked_input_ids,
+                        target=original_input_ids,
                         vocab_start_index=tp_rank * output_tensor.shape[-1],
                         vocab_end_index=(tp_rank + 1) * output_tensor.shape[-1],
                         tp_group=tp_grp,
@@ -1441,7 +1442,6 @@ class MegatronPolicyWorker(AbstractPolicyWorker, ColocatablePolicyInterface):
                 token_logprobs = torch.cat(
                     [torch.zeros_like(token_logprobs[:, :1]), token_logprobs], dim=1
                 )
-                token_logprobs = expand_multimodal_tokens(token_logprobs, mm_dict)
                 return torch.tensor(0.0, device=token_logprobs.device), {
                     "logprobs": token_logprobs
                 }
@@ -1607,11 +1607,11 @@ class MegatronPolicyWorker(AbstractPolicyWorker, ColocatablePolicyInterface):
         ):
             nonlocal pad_full_seq_to, pad_packed_seq_to_multiple_of, pad_factor
             data_dict = next(data_iterator).to("cuda")
-            data_dict, mm_dict = collapse_multimodal_tokens(data_dict, model)
+            original_seq_length = data_dict["input_ids"].shape[1]
+            data_dict = collapse_multimodal_tokens(data_dict, model)
 
             pack = self.cfg["sequence_packing"]["enabled"]
             if pack:
-                original_seq_length = data_dict["input_ids"].shape[1]
                 cp_size = self.cfg["megatron_cfg"]["context_parallel_size"]
                 cp_rank = get_context_parallel_rank()
 
@@ -1665,7 +1665,9 @@ class MegatronPolicyWorker(AbstractPolicyWorker, ColocatablePolicyInterface):
                 **multimodal_data,
             )
 
-            output_tensor = expand_multimodal_tokens(output_tensor, mm_dict)
+            assert output_tensor.shape[1] == original_seq_length, (
+                f"Model output length {output_tensor.shape[1]} != input length {original_seq_length}"
+            )
             if "generation" in self.cfg and self.cfg["generation"] is not None:
                 output_tensor.div_(self.cfg["generation"]["temperature"])
 

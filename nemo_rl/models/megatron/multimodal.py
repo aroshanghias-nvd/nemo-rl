@@ -19,25 +19,21 @@ from einops import rearrange
 from megatron.core.packed_seq_params import PackedSeqParams
 
 
-def collapse_multimodal_tokens(data_dict: dict, model) -> tuple[dict, dict]:
+def collapse_multimodal_tokens(data_dict: dict, model) -> dict:
     """Collapse N image tokens to 1 token per image for Megatron LLaVA forward pass.
 
     vLLM uses N tokens per image (1:1 token-to-embedding), while Megatron uses 1 token
-    per image (1:N via imgs_sizes). This collapses <img><image>×N</img> to <img><image></img>.
-
-    Returns (data_dict, metadata) where metadata contains info needed to expand back.
+    per image/tile (1:N via imgs_sizes). This collapses <img><image>×N</img> to <img><image></img>.
     """
     image_token_ids = _get_image_token_ids(model)
     if image_token_ids is None or "pixel_values" not in data_dict:
-        return data_dict, {}
+        return data_dict
 
     input_ids = data_dict["input_ids"]
     input_lengths = data_dict.get("input_lengths")
     img_start_id, img_end_id = image_token_ids
     batch_size = input_ids.shape[0]
-    original_seq_len = input_ids.shape[1]
 
-    keep_masks = []
     collapsed_list = []
     new_lengths = []
 
@@ -50,7 +46,6 @@ def collapse_multimodal_tokens(data_dict: dict, model) -> tuple[dict, dict]:
             end_pos = (sample[start_pos:] == img_end_id).nonzero(as_tuple=True)[0][0] + start_pos
             keep_mask[start_pos + 2 : end_pos] = False
 
-        keep_masks.append(keep_mask)
         collapsed_list.append(sample[keep_mask])
         new_lengths.append(keep_mask.sum().item())
 
@@ -68,30 +63,7 @@ def collapse_multimodal_tokens(data_dict: dict, model) -> tuple[dict, dict]:
             new_lengths, dtype=input_lengths.dtype, device=input_lengths.device
         )
 
-    mm_metadata = {
-        "original_seq_len": original_seq_len,
-        "batch_size": batch_size,
-        "keep_masks": keep_masks,
-    }
-    return new_data_dict, mm_metadata
-
-
-def expand_multimodal_tokens(tensor: torch.Tensor, mm_metadata: dict) -> torch.Tensor:
-    """Expand collapsed tensor back to original sequence length (inverse of collapse)."""
-    if not mm_metadata:
-        return tensor
-    original_seq_len = mm_metadata["original_seq_len"]
-    batch_size = mm_metadata["batch_size"]
-    keep_masks = mm_metadata["keep_masks"]
-    if tensor.shape[1] == original_seq_len:
-        return tensor
-    extra_dims = tensor.shape[2:] if tensor.dim() > 2 else ()
-    result = torch.zeros(
-        batch_size, original_seq_len, *extra_dims, dtype=tensor.dtype, device=tensor.device
-    )
-    for b, mask in enumerate(keep_masks):
-        result[b, : len(mask)][mask] = tensor[b, : mask.sum()]
-    return result
+    return new_data_dict
 
 
 def _get_image_token_ids(model) -> Optional[tuple[int, int]]:
