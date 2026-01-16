@@ -162,7 +162,7 @@ triton = [
   { index = "pytorch-cu129", marker = "sys_platform != 'darwin'" },
   { index = "pypi", marker = "sys_platform == 'darwin'" },
 ]
-causal-conv1d = { git = "https://github.com/Dao-AILab/causal-conv1d", tag = "v1.5.0.post8" }
+causal-conv1d = { git = "https://github.com/Dao-AILab/causal-conv1d", tag = "v1.6.0" }
 mamba-ssm = { git = "https://github.com/state-spaces/mamba.git", tag = "v2.3.0" }
 nv-grouped-gemm = { git = "https://github.com/fanshiqing/grouped_gemm", tag = "v1.1.4.post7" }
 vllm = {path = "3rdparty/vllm", editable = true}
