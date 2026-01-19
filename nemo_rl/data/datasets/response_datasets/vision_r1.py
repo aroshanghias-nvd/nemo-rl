@@ -19,6 +19,7 @@ from typing import Any, Optional
 from datasets import load_dataset
 from PIL import Image
 
+from nemo_rl.data.datasets.raw_dataset import RawDataset
 from nemo_rl.data.interfaces import TaskDataSpec
 
 
@@ -120,7 +121,7 @@ def prepare_vision_r1_dataset(
     }
 
 
-class VisionR1Dataset:
+class VisionR1Dataset(RawDataset):
     def __init__(
         self,
         split: str = "train",

@@ -1,9 +1,9 @@
-from typing import Optional
 import json
 from typing import Any, Optional
 
 from datasets import Dataset, Features, Sequence, Value
 
+from nemo_rl.data.datasets.raw_dataset import RawDataset
 from nemo_rl.data.interfaces import TaskDataSpec
 
 
@@ -78,7 +78,7 @@ mmpr-1.2-m3cot_train_extracted_pairs_vqa_direct_rules
 """.strip().split()
 
 
-class MmprNanov2FilteredDataset:
+class MmprNanov2FilteredDataset(RawDataset):
     def __init__(
         self,
         train_data_path: Optional[str] = None,

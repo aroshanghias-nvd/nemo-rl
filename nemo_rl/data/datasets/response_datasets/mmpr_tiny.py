@@ -21,6 +21,7 @@ import pandas as pd
 from datasets import Dataset
 from huggingface_hub import hf_hub_download
 
+from nemo_rl.data.datasets.raw_dataset import RawDataset
 from nemo_rl.data.interfaces import TaskDataSpec
 
 
@@ -173,7 +174,7 @@ def prepare_mmpr_tiny_dataset(
     }
 
 
-class MMPRTinyDataset:
+class MMPRTinyDataset(RawDataset):
     def __init__(
         self,
         split: str = "train",

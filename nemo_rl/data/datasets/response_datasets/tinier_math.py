@@ -1,14 +1,15 @@
-from typing import Optional
 import json
 import random
+from typing import Optional
 
-from datasets import Dataset, Features, Sequence, Value, Image as ImageFeature
+from datasets import Dataset, Features, Image as ImageFeature, Sequence, Value
 from PIL import Image
 
+from nemo_rl.data.datasets.raw_dataset import RawDataset
 from nemo_rl.data.interfaces import TaskDataSpec
 
 
-class TinierMathDataset:
+class TinierMathDataset(RawDataset):
     def __init__(
         self,
         train_data_path: Optional[str] = None,
