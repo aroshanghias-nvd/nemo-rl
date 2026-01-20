@@ -2383,6 +2383,7 @@ class MegatronPolicyWorker(AbstractPolicyWorker, ColocatablePolicyInterface):
         print(
             f"GPU Memory after refit complete: {allocated:.2f}GB allocated, {reserved:.2f}GB reserved"
         )
+        print(torch.cuda.memory_summary(device=None, abbreviated=False))
         no_grad.__exit__(None, None, None)
 
     @torch.no_grad()
