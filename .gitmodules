@@ -18,8 +18,3 @@
 	url = https://github.com/NVIDIA-NeMo/Gym.git
 	branch = main
 	shallow = true
-[submodule "3rdparty/vllm"]
-	path = 3rdparty/vllm
-	url = https://github.com/netanel-haber/vllm.git
-	branch = dynres
-	shallow = true

@@ -112,8 +112,6 @@ build = [
   "pybind11",
   # Build requirement for flash-attn
   "psutil",
-  # Build requirement for vllm (no-build-isolation)
-  "setuptools_scm",
 ]
 docs = [
   "sphinx",
@@ -242,7 +240,6 @@ transformer-engine-torch = [{ requirement = "torch", match-runtime = true }]
 mamba-ssm = [{ requirement = "torch", match-runtime = true }]
 causal-conv1d = [{ requirement = "torch", match-runtime = true }]
 nv-grouped-gemm = [{ requirement = "torch", match-runtime = true }]
-vllm = ["setuptools_scm"]
 
 # Needed when building from source
 [[tool.uv.dependency-metadata]]
@@ -278,10 +275,6 @@ name = "nv-grouped-gemm"
 # This version has to match the version in the commit/rev/tag used
 version = "v1.1.4.post7"
 requires-dist = ["setuptools", "wheel", "torch", "numpy"]
-
-[[tool.uv.dependency-metadata]]
-name = "vllm"
-requires-dist = ["setuptools", "setuptools_scm", "torch", "packaging"]
 
 [tool.black]
 line-length = 120
