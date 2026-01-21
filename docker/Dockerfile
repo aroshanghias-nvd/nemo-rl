@@ -105,6 +105,11 @@ fi
 # to warm the uv cache, then at the end just sync the default dependencies.
 # Do everything in one layer to prevent large layers.
 
+# Explicitly export for setuptools-scm (vllm submodule lacks git history in container)
+export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_VLLM="${SETUPTOOLS_SCM_PRETEND_VERSION_FOR_VLLM}"
+export SETUPTOOLS_SCM_PRETEND_VERSION="${SETUPTOOLS_SCM_PRETEND_VERSION_FOR_VLLM}"
+echo "SETUPTOOLS_SCM_PRETEND_VERSION=$SETUPTOOLS_SCM_PRETEND_VERSION"
+
 # The venv is symlinked to avoid bloating the layer size
 uv sync --link-mode symlink --locked --no-install-project
 uv sync --link-mode symlink --locked --extra vllm --no-install-project
