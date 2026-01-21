@@ -88,6 +88,7 @@ COPY --from=nemo-rl --link 3rdparty/ ./3rdparty/
 
 # for using custom vllm (27ca95b3c9e6e32ac02508e729c01865800fd036)
 ENV VLLM_PRECOMPILED_WHEEL_LOCATION=https://wheels.vllm.ai/27ca95b3c9e6e32ac02508e729c01865800fd036/vllm-0.14.0rc2.dev196%2Bg27ca95b3c-cp38-abi3-manylinux_2_31_x86_64.whl
+ENV SETUPTOOLS_SCM_PRETEND_VERSION_FOR_VLLM=0.14.0rc2.dev196+g27ca95b3c
 
 RUN --mount=type=ssh <<"EOF" bash -exu
 uv venv --seed
@@ -133,6 +134,7 @@ LABEL com.nvidia.build.ref="${NVIDIA_BUILD_REF}"
 ENV NEMO_RL_VENV_DIR=/opt/ray_venvs
 # for using custom vllm (27ca95b3c9e6e32ac02508e729c01865800fd036)
 ENV VLLM_PRECOMPILED_WHEEL_LOCATION=https://wheels.vllm.ai/27ca95b3c9e6e32ac02508e729c01865800fd036/vllm-0.14.0rc2.dev196%2Bg27ca95b3c-cp38-abi3-manylinux_2_31_x86_64.whl
+ENV SETUPTOOLS_SCM_PRETEND_VERSION_FOR_VLLM=0.14.0rc2.dev196+g27ca95b3c
 
 # Copy in source from build context (defaults to cloned repo, can be overridden)
 # Exclude pyproject.toml and uv.lock since those may be altered by build-custom-vllm.sh
