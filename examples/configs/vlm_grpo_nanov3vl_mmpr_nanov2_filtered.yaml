@@ -1,0 +1,258 @@
+# GRPO training for Nemotron Nano v3 VL on MMPR dataset
+# Configured for 16 H100 80GB nodes with Megatron backend
+#
+# Model: ~31.5B params (MoE with 128 experts, top-6 routing, ~3B active)
+# Memory estimate: TP=2, EP=16 → 8 experts/rank, ~74GB per rank
+#
+# Run with:
+# VLLM_PRECOMPILED_WHEEL_LOCATION=https://wheels.vllm.ai/855b101d75d2fc1fa02a47a6fcfa4053e8541cf0/vllm-0.13.0rc2.dev159%2Bg855b101d7-cp38-abi3-manylinux_2_31_x86_64.whl \
+# TORCH_CUDA_ARCH_LIST="9.0 10.0" \
+# NRL_FORCE_REBUILD_VENVS=true \
+# uv run examples/run_vlm_grpo.py --config examples/configs/vlm_grpo_nanov3vl_mmpr_nanov2_filtered.yaml
+
+grpo:
+  num_prompts_per_step: 512  # 16 nodes
+  num_generations_per_prompt: 16
+  max_rollout_turns: 1
+  max_num_epochs: 1
+  max_num_steps: 1000000
+  normalize_rewards: true
+  use_leave_one_out_baseline: true
+  val_period: 0
+  val_at_start: false
+  overlong_filtering: true
+  zero_variance_prompt_filtering: false
+  max_val_samples: 256
+  val_batch_size: 256
+  seed: 42
+  seq_logprob_error_threshold: 2
+  use_dynamic_sampling: false
+  batch_multiplier: 1
+  reward_shaping:
+    enabled: false
+    overlong_buffer_length: 512
+    overlong_buffer_penalty: 1
+    max_response_length: ${policy.max_total_sequence_length}
+  reward_scaling:
+    enabled: false
+    source_min: 0.0
+    source_max: 1.0
+    target_min: 0.0
+    target_max: 1.0
+  async_grpo:
+    enabled: false
+    max_trajectory_age_steps: 1
+
+loss_fn:
+  reference_policy_kl_penalty: 0.0
+  reference_policy_kl_type: k3
+  kl_input_clamp_value: null
+  kl_output_clamp_value: null
+  ratio_clip_min: 0.2
+  ratio_clip_max: 0.28  # Clip-Higher, ref: DAPO, JustRL
+  ratio_clip_c: null
+  use_on_policy_kl_approximation: false
+  use_importance_sampling_correction: false
+  sequence_level_importance_ratios: true  # gspo
+  token_level_loss: false  # gspo
+  truncated_importance_sampling_ratio: null
+
+checkpointing:
+  enabled: true
+  checkpoint_dir: "results/grpo_nanov3vl_mmpr_nanov2_filtered"
+  metric_name: "val:reward"
+  higher_is_better: true
+  keep_top_k: 50
+  save_period: 10
+  checkpoint_must_save_by: "00:03:45:00"
+
+policy:
+  # model_name: "/lustre/fsw/portfolios/llmservice/users/kchumachenko/workspace/output/sft_moe_rl_llm_eval_mode_radio_v4_two_epochs_bs_x2_1212_matthieul/checkpoints/tp_1/check_hf_2/mcore_to_hf"
+  model_name: "/lustre/fs1/portfolios/llmservice/users/jseppanen/workspace/output/sft_moe_rl_llm_eval_mode_radio_v4_two_epochs_bs_x2_1212_v1352_math_stem_text_kvqa_raven_rephrased_geometry3k_geothought/checkpoints/tp_1_hf/iter_0012736/mcore_to_hf"
+  tokenizer:
+    name: ${policy.model_name}
+    # Nano v3 chat template with thinking support
+    chat_template: "{%- set ns = namespace(enable_thinking=true, has_sys_prompt=false) -%}{%- set msg = namespace(content='') -%}{%- for message in messages -%}{%- if message['content'] is string -%}{%- if message['role'] == 'user' or message['role'] == 'system' -%}{%- if '/think' in message['content'] -%}{%- set ns.enable_thinking = true -%}{%- elif '/no_think' in message['content'] -%}{%- set ns.enable_thinking = false -%}{%- endif -%}{%- endif -%}{%- else -%}{%- for content in message['content'] -%}{%- if content['type'] == 'text' -%}{%- if message['role'] == 'user' or message['role'] == 'system' -%}{%- if '/think' in content['text'] -%}{%- set ns.enable_thinking = true -%}{%- elif '/no_think' in content['text'] -%}{%- set ns.enable_thinking = false -%}{%- endif -%}{%- endif -%}{%- endif -%}{%- endfor -%}{%- endif -%}{%- endfor -%}{%- for message in messages %}{%- if message['content'] is string -%}{%- set msg.content = message['content'] -%}{%- else -%}{%- set msg.content = '' -%}{%- for content in message['content'] -%}{%- if content['type'] == 'image' -%}{%- set msg.content = msg.content + '<image>' -%}{%- elif content['type'] == 'video' -%}{%- set msg.content = msg.content + '<video>' -%}{%- elif content['type'] == 'text' -%}{%- set msg.content = msg.content + content['text'] -%}{%- endif -%}{%- endfor -%}{%- endif -%}{%- if message['role'] == 'system' %}{{- '<SPECIAL_10>System\n' + msg.content }}{%- if tools -%}{%- if msg.content != '' -%}{{- '\n\n' -}}{%- endif -%}{{- 'You can use the following tools to assist the user if required:\n<AVAILABLE_TOOLS>[' -}}{%- for tool in tools -%}{{- (tool.function if tool.function is defined else tool) | tojson -}}{{- ', ' if not loop.last else '' -}}{%- endfor -%}{{- ']</AVAILABLE_TOOLS>\n\nIf you decide to call any tool(s), use the following format:\n<TOOLCALL>[{{\"name\": \"tool_name1\", \"arguments\": \"tool_args1\"}}, {{\"name\": \"tool_name2\", \"arguments\": \"tool_args2\"}}]</TOOLCALL>\n\nThe user will execute tool-calls and return responses from tool(s) in this format:\n<TOOL_RESPONSE>[{{\"response\": \"tool_response1\"}}, {{\"response\": \"tool_response2\"}}]</TOOL_RESPONSE>\n\nBased on the tool responses, you can call additional tools if needed, correct tool calls if any errors are found, or just respond to the user.' -}}{%- endif -%}{{- '\n' -}}{%- elif message['role'] == 'user' %}{{- '<SPECIAL_11>User\n' + msg.content + '\n' }}{%- elif message['role'] == 'tool' %}{%- if loop.first or (messages[loop.index0 - 1].role != 'tool') -%}{{- '<SPECIAL_11>User\n' + '<TOOL_RESPONSE>[' }}{%- endif -%}{{- msg.content -}}{{- ', ' if not loop.last and (messages[loop.index0 + 1].role == 'tool') else '' -}}{%- if loop.last or (messages[loop.index0 + 1].role != 'tool') -%}{{- ']</TOOL_RESPONSE>\n' -}}{%- endif -%}{%- elif message['role'] == 'assistant' %}{%- if '</think>' in msg.content %}{%- set msg.content = msg.content %}{%- endif %}{{- '<SPECIAL_11>Assistant\n' + msg.content.strip() }}{%- if message.tool_calls -%}{%- if msg.content.strip() != '' -%}{{- '\n\n' -}}{%- endif -%}{{- '<TOOLCALL>[' -}}{%- for call in message.tool_calls -%}{%- set fn = call.function if call.function is defined else call -%}{{- '{\"name\": \"' + fn.name + '\", \"arguments\": ' -}}{%- if fn.arguments is string -%}{{- fn.arguments -}}{%- else -%}{{- fn.arguments | tojson -}}{%- endif -%}{{- '}' + (', ' if not loop.last else '') -}}{%- endfor -%}{{- ']</TOOLCALL>' -}}{%- endif -%}{{- '\n<SPECIAL_12>\n' -}}{%- endif %}{%- endfor -%}{%- if add_generation_prompt %}{{- '<SPECIAL_11>Assistant\n' }}{%- if ns.enable_thinking is defined and ns.enable_thinking is false %}{{- '<think></think>' }}{%- else %}{{- '<think>\n' }}{%- endif %}{%- endif %}"
+  train_global_batch_size: 512
+  train_micro_batch_size: 1
+  logprob_batch_size: 1  # Dynamic resolution only works for mbz=1
+  max_total_sequence_length: 16384
+  precision: "bfloat16"
+  logprob_chunk_size: 2048
+  offload_optimizer_for_logprob: false
+
+  dtensor_cfg:
+    enabled: false
+
+  dynamic_batching:
+    enabled: false
+    # enabled: True  # VLM: better for variable image sizes
+    # train_mb_tokens: ${mul:${policy.max_total_sequence_length}, ${policy.train_micro_batch_size}}
+    # logprob_mb_tokens: ${mul:${policy.max_total_sequence_length}, ${policy.logprob_batch_size}}
+    # sequence_length_round: 64
+
+  # Must be divisible by TP for sequence parallel
+  make_sequence_length_divisible_by: ${policy.megatron_cfg.tensor_model_parallel_size}
+  max_grad_norm: 1.0
+
+  sequence_packing:
+    enabled: false
+
+  optimizer: null
+  scheduler: null
+
+  megatron_cfg:
+    enabled: true
+    empty_unused_memory_level: 1
+    activation_checkpointing: true
+    # Parallelism for 16 H100 80GB nodes (128 GPUs):
+    # TP=2, EP=16 → model_parallel=32, DP=4
+    # 128 experts / EP 16 = 8 experts per rank
+    # Memory: ~74GB per rank (fits in 80GB)
+    # Alternative for more headroom: TP=2, EP=8 → DP=8, 16 experts/rank, ~49GB
+    tensor_model_parallel_size: 2
+    expert_model_parallel_size: 16
+    expert_tensor_parallel_size: 1
+    pipeline_model_parallel_size: 1
+    num_layers_in_first_pipeline_stage: null
+    num_layers_in_last_pipeline_stage: null
+    context_parallel_size: 1
+    pipeline_dtype: ${policy.precision}
+    # Sequence parallel required for TP>1 to reduce activation memory
+    sequence_parallel: true
+    # MoE settings
+    freeze_moe_router: true
+    moe_router_dtype: "fp32"
+    moe_router_load_balancing_type: "none"  # aux_loss has known issues in Megatron-LM
+    moe_router_bias_update_rate: 1e-3
+    moe_router_enable_expert_bias: true
+    moe_permute_fusion: true
+    moe_enable_deepep: false
+    moe_token_dispatcher_type: "alltoall"
+    moe_shared_expert_overlap: true
+    moe_aux_loss_coeff: 0.0
+    # LLM settings
+    apply_rope_fusion: true
+    bias_activation_fusion: false  # VLM: must be false for Nano v3 VL
+    defer_fp32_logits: true
+    do_not_average_loss: true
+    calculate_per_token_loss: true
+    scale_loss_by_dp_cp_size: false
+    track_moe_metrics: true
+    moe_per_layer_logging: true
+    # VLM-specific
+    radio_force_cpe_eval_mode: true
+
+    optimizer:
+      optimizer: "adam"
+      lr: 3e-6
+      min_lr: 3e-6
+      weight_decay: 0.0
+      bf16: true
+      fp16: false
+      params_dtype: "float32"
+      adam_beta1: 0.9
+      adam_beta2: 0.999
+      adam_eps: 1e-8
+      sgd_momentum: 0.9
+      use_distributed_optimizer: true
+      use_precision_aware_optimizer: true
+      clip_grad: ${policy.max_grad_norm}
+      optimizer_cpu_offload: false
+      optimizer_offload_fraction: 0
+
+    scheduler:
+      start_weight_decay: ${policy.megatron_cfg.optimizer.weight_decay}
+      end_weight_decay: ${policy.megatron_cfg.optimizer.weight_decay}
+      weight_decay_incr_style: "constant"
+      lr_decay_style: "constant"
+      lr_decay_iters: null
+      lr_warmup_iters: 10
+      lr_warmup_init: 0.3e-7
+
+    distributed_data_parallel_config:
+      grad_reduce_in_fp32: false
+      overlap_grad_reduce: false
+      overlap_param_gather: false
+      average_in_collective: false
+      use_custom_fsdp: false
+      data_parallel_sharding_strategy: "optim_grads_params"
+
+    env_vars: null
+
+  generation:
+    backend: "vllm"
+    max_new_tokens: ${policy.max_total_sequence_length}
+    temperature: 1.0
+    top_p: 1.0
+    top_k: null
+    stop_token_ids: null
+    stop_strings: null
+    bad_words: ["<image>", "<img>", "</img>"]  # VLM: prevent generating image tokens
+    vllm_cfg:
+      async_engine: false
+      kv_cache_dtype: auto
+      precision: ${policy.precision}
+      tensor_parallel_size: 2
+      pipeline_parallel_size: 1
+      expert_parallel_size: 1
+      gpu_memory_utilization: 0.7  # VLM: needs more memory
+      max_model_len: ${policy.max_total_sequence_length}
+      enforce_eager: False
+      use_deep_gemm: False
+      num_last_layers_in_bf16: 0
+      num_first_layers_in_bf16: 0
+      skip_tokenizer_init: False
+    vllm_kwargs:
+      limit_mm_per_prompt: {"image": 2}  # VLM: limit images per prompt
+      max_num_batched_tokens: ${policy.max_total_sequence_length}
+      # max_num_seqs: 64
+      max_num_seqs: 32
+      mamba_ssm_cache_dtype: "float32"
+      # skip_mm_profiling: true  # VLM: skip multimodal profiling
+    colocated:
+      enabled: true
+      resources:
+        gpus_per_node: null
+        num_nodes: null
+
+data:
+  max_input_seq_length: ${policy.max_total_sequence_length}
+  train_data_path: "/lustre/fs1/portfolios/llmservice/projects/llmservice_nlp_fm/datasets/eagle-next/image_data/rl_data/mmpr1.2_nanov2_filtered/mmpr_nanov2_filtered_v1.jsonl"
+  prompt_file: null
+  system_prompt_file: examples/prompts/nano_v3_system_prompt.txt
+  dataset_name: "mmpr_nanov2_filtered"
+  env_name: "mmpr_nanov2_filtered"
+  split: "train"
+  shuffle: false  # dataset has been pre-ordered based on stratified difficulty
+  val_size: 0
+  num_workers: 1
+
+env:
+  mmpr_nanov2_filtered:
+    num_workers: 8
+    reward_functions:
+      - name: mmpr_filtered
+        weight: 1.0
+        kwargs:
+          format_weight: 0.1
+
+logger:
+  log_dir: "logs"
+  num_val_samples_to_print: 0
+  wandb_enabled: false
+  tensorboard_enabled: true
+  mlflow_enabled: false
+  swanlab_enabled: false
+  monitor_gpus: true
+  wandb:
+    project: "grpo-nanov3vl"
+    name: "grpo-nanov3vl-mmpr-16n"
+  tensorboard: {}
+  gpu_monitoring:
+    collection_interval: 10
+    flush_interval: 10
+
+cluster:
+  gpus_per_node: 8
+  num_nodes: 16
