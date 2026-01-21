@@ -7,8 +7,9 @@
 
 ARG BASE_IMAGE=nvcr.io/nvidia/cuda-dl-base:25.05-cuda12.9-devel-ubuntu24.04
 FROM scratch AS nemo-rl
-ARG NRL_GIT_REF=main
-ADD --keep-git-dir=true https://github.com/NVIDIA-NeMo/RL.git#${NRL_GIT_REF} /
+# ARG NRL_GIT_REF=main
+# ADD --keep-git-dir=true https://github.com/NVIDIA-NeMo/RL.git#${NRL_GIT_REF} /
+ADD . /
 
 FROM ${BASE_IMAGE} AS base
 # An environment variable to indicate that we are in a container.
@@ -85,8 +86,14 @@ COPY --from=nemo-rl tools/build-custom-vllm.sh ./tools/build-custom-vllm.sh
 COPY --from=nemo-rl --link research/ ./research/
 COPY --from=nemo-rl --link 3rdparty/ ./3rdparty/
 
+# for using custom vllm (193069d129414f8f70218f8fb88fb92c75f17ce5)
+ENV VLLM_PRECOMPILED_WHEEL_LOCATION=https://wheels.vllm.ai/1a1fc3bbc062e3ad289447e6a13ce57971618b43/vllm-0.14.0rc2.dev158%2Bg1a1fc3bbc-cp38-abi3-manylinux_2_31_x86_64.whl
+
 RUN --mount=type=ssh <<"EOF" bash -exu
 uv venv --seed
+# Install vllm build dependencies early since vllm is built without isolation
+VIRTUAL_ENV=/opt/nemo_rl_venv uv pip install setuptools setuptools_scm
+VIRTUAL_ENV=/opt/nemo_rl_venv uv pip install torch==2.9.0 --index https://download.pytorch.org/whl/cu129
 if [[ -n "${BUILD_CUSTOM_VLLM:-}" ]]; then
     bash tools/build-custom-vllm.sh
     source 3rdparty/vllm/nemo-rl.env
@@ -124,6 +131,8 @@ LABEL com.nvidia.build.id="${NVIDIA_BUILD_ID}"
 LABEL com.nvidia.build.ref="${NVIDIA_BUILD_REF}"
 
 ENV NEMO_RL_VENV_DIR=/opt/ray_venvs
+# for using custom vllm (193069d129414f8f70218f8fb88fb92c75f17ce5)
+ENV VLLM_PRECOMPILED_WHEEL_LOCATION=https://wheels.vllm.ai/1a1fc3bbc062e3ad289447e6a13ce57971618b43/vllm-0.14.0rc2.dev158%2Bg1a1fc3bbc-cp38-abi3-manylinux_2_31_x86_64.whl
 
 # Copy in source from build context (defaults to cloned repo, can be overridden)
 # Exclude pyproject.toml and uv.lock since those may be altered by build-custom-vllm.sh
