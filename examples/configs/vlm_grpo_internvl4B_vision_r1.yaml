@@ -33,7 +33,7 @@ loss_fn:
 checkpointing:
   enabled: true
   checkpoint_dir: "results/grpo_internvl4B_vision_r1_dev"
-  metric_name: "val_reward"
+  metric_name: "val:reward"
   higher_is_better: true
   keep_top_k: 30
   save_period: 10
