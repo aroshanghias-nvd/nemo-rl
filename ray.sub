@@ -216,7 +216,7 @@ head_cmd=$(cat <<EOF
 touch $LOG_DIR/STARTED_RAY_HEAD
 env
 
-rm -rf /opt/ray_venvs || true
+# rm -rf /opt/ray_venvs || true
 export NCCL_DEBUG=INFO
 
 exit-dramatically() {
@@ -325,7 +325,7 @@ for ((i = 1; i < SLURM_JOB_NUM_NODES; i++)); do
   worker_cmd=$(cat <<EOF
 env
 
-rm -rf /opt/ray_venvs || true
+# rm -rf /opt/ray_venvs || true
 export NCCL_DEBUG=INFO
 
 exit-dramatically() {
