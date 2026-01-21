@@ -94,7 +94,7 @@ RUN --mount=type=ssh <<"EOF" bash -exu
 uv venv --seed
 # Install vllm build dependencies early since vllm is built without isolation
 VIRTUAL_ENV=/opt/nemo_rl_venv uv pip install setuptools setuptools_scm
-VIRTUAL_ENV=/opt/nemo_rl_venv uv pip install torch==2.9.0 --index https://download.pytorch.org/whl/cu129
+VIRTUAL_ENV=/opt/nemo_rl_venv uv pip install torch==2.9.1 --index https://download.pytorch.org/whl/cu129
 if [[ -n "${BUILD_CUSTOM_VLLM:-}" ]]; then
     bash tools/build-custom-vllm.sh
     source 3rdparty/vllm/nemo-rl.env
