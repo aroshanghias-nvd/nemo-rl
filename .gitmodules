@@ -20,4 +20,5 @@
 	shallow = true
 [submodule "3rdparty/vllm"]
 	path = 3rdparty/vllm
-	url = https://github.com/vllm-project/vllm.git
+	url = https://github.com/jseppanen/vllm.git
+    branch = jseppanen/fix-sleep-offloading
