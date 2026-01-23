@@ -76,7 +76,8 @@ policy:
   train_global_batch_size: 512
   train_micro_batch_size: 1
   logprob_batch_size: 1  # Dynamic resolution only works for mbz=1
-  max_total_sequence_length: 16384
+  # max_total_sequence_length: 16384
+  max_total_sequence_length: 12288
   precision: "bfloat16"
   logprob_chunk_size: 2048
   offload_optimizer_for_logprob: false
@@ -247,7 +248,7 @@ logger:
   monitor_gpus: true
   wandb:
     project: "grpo-nanov3vl"
-    name: "grpo-nanov3vl-mmpr-16n"
+    name: "grpo-nanov3vl-mmpr"
   tensorboard: {}
   gpu_monitoring:
     collection_interval: 10
