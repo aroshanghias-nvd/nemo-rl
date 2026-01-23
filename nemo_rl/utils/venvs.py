@@ -30,39 +30,6 @@ DEFAULT_VENV_DIR = os.path.join(git_root, "venvs")
 logger = logging.getLogger(__name__)
 
 
-def _override_vllm_package():
-    """Override container's vllm with development version from workspace.
-
-    In container environments, replaces /opt/nemo-rl/3rdparty/vllm with a symlink
-    to the vllm in the current workspace (from SLURM_SUBMIT_DIR or cwd).
-    This allows using a development version of vllm without rebuilding the container.
-    """
-    if not os.environ.get("NRL_CONTAINER"):
-        return
-
-    container_vllm = Path("/opt/nemo-rl/3rdparty/vllm")
-    workspace_dir = os.environ.get("SLURM_SUBMIT_DIR", os.getcwd())
-    workspace_vllm = Path(workspace_dir) / "3rdparty" / "vllm"
-
-    if not workspace_vllm.exists():
-        logger.debug(f"No workspace vllm found at {workspace_vllm}, skipping symlink")
-        return
-
-    if container_vllm.is_symlink():
-        current_target = container_vllm.resolve()
-        if current_target == workspace_vllm.resolve():
-            logger.debug(f"vllm symlink already points to {workspace_vllm}")
-            return
-
-    logger.info(f"Setting up vllm dev symlink: {container_vllm} -> {workspace_vllm}")
-    if container_vllm.exists() or container_vllm.is_symlink():
-        if container_vllm.is_dir() and not container_vllm.is_symlink():
-            shutil.rmtree(container_vllm)
-        else:
-            container_vllm.unlink()
-    container_vllm.symlink_to(workspace_vllm)
-
-
 @lru_cache(maxsize=None)
 def create_local_venv(
     py_executable: str, venv_name: str, force_rebuild: bool = False
@@ -147,9 +114,6 @@ def create_local_venv(
 def _env_builder(
     py_executable: str, venv_name: str, node_idx: int, force_rebuild: bool = False
 ):
-    # TODO(jseppanen): temporary fix to enforce vllm submodule is used
-    _override_vllm_package()
-
     # Check if another node is already building
     NEMO_RL_VENV_DIR = os.path.normpath(
         os.environ.get("NEMO_RL_VENV_DIR", DEFAULT_VENV_DIR)
@@ -201,9 +165,6 @@ def create_local_venv_on_each_node(py_executable: str, venv_name: str):
     Returns:
         str: Path to the python executable in the created virtual environment
     """
-    # TODO(jseppanen): temporary fix to enforce vllm submodule is used
-    _override_vllm_package()
-
     # Determine the number of alive Ray nodes
     nodes = [n for n in ray.nodes() if n.get("Alive", False)]
     num_nodes = len(nodes)
