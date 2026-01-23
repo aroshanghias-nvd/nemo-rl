@@ -660,9 +660,12 @@ class MegatronPolicyWorker(AbstractPolicyWorker, ColocatablePolicyInterface):
             hf_model_subdir = f"model_{hf_model_subdir.replace('/', '_')}"
 
         pretrained_path = f"{get_megatron_checkpoint_dir()}/{hf_model_subdir}"
+        pretrained_run_config = os.path.join(
+            pretrained_path, "iter_0000000/run_config.yaml"
+        )
         pt_checkpoint_exists = os.path.exists(pretrained_path) and os.path.exists(
             os.path.join(pretrained_path, "iter_0000000")
-        )
+        ) and os.path.exists(pretrained_run_config)
 
         # Ensure clean slate before import
         destroy_parallel_state()
@@ -686,9 +689,9 @@ class MegatronPolicyWorker(AbstractPolicyWorker, ColocatablePolicyInterface):
                 print("Reinitializing model parallel after loading model state.")
                 parallel_state.destroy_model_parallel()
 
-        pretrained_run_config = os.path.join(
-            pretrained_path, "iter_0000000/run_config.yaml"
-        )
+        # Barrier to ensure all ranks wait for the HF->mcore conversion to complete
+        # before checking for run_config.yaml (avoids race condition with NFS caching)
+        torch.distributed.barrier()
 
         self.tokenizer = tokenizer
         if self.tokenizer.pad_token is None:
