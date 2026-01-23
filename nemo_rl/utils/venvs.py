@@ -95,7 +95,7 @@ def create_local_venv(
 
     # TODO this is temporarily needed b/c container has mcore before fix to build-meta was introduced
     subprocess.run(
-        "uv pip install setuptools setuptools_scm torch==2.9.0 --torch-backend=cu129".split(),
+        "uv pip install setuptools setuptools_scm torch==2.9.1 --torch-backend=cu129".split(),
         env=env | {"VIRTUAL_ENV": venv_path},
         check=True,
     )
