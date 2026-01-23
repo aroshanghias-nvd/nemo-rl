@@ -158,7 +158,7 @@ from megatron.bridge.utils.instantiate_utils import InstantiationMode
 from megatron.bridge.utils.vocab_utils import calculate_padded_vocab_size
 from megatron.core import parallel_state
 from megatron.core.distributed import DistributedDataParallel
-from megatron.core.distributed.fsdp.mcore_fsdp_adapter import (
+from megatron.core.distributed.custom_fsdp.fully_sharded_data_parallel import (
     FullyShardedDataParallel as custom_FSDP,
 )
 from megatron.core.inference.model_inference_wrappers.inference_wrapper_config import (
