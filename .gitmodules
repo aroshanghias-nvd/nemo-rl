@@ -1,16 +1,16 @@
 [submodule "3rdparty/Megatron-LM"]
 	path = 3rdparty/Megatron-LM-workspace/Megatron-LM
-	url = https://gitlab-master.nvidia.com/ADLR/megatron-lm.git
-	branch = jseppanen/nano-v3-vl
+	url = ssh://git@gitlab-master.nvidia.com:12051/yifuw/megatron-lm.git
+	branch = yifu/nano-v3-vl
 	shallow = true
 [submodule "3rdparty/Megatron-Bridge"]
 	path = 3rdparty/Megatron-Bridge-workspace/Megatron-Bridge
-	url = https://gitlab-master.nvidia.com/jseppanen/Megatron-Bridge.git
-	branch = jseppanen/nano-v3-vl
+	url = ssh://git@gitlab-master.nvidia.com:12051/liding/Megatron-Bridge.git
+	branch = yifu/nano-v3-vl
 	shallow = true
 [submodule "3rdparty/Automodel-workspace/Automodel"]
 	path = 3rdparty/Automodel-workspace/Automodel
-	url = https://gitlab-master.nvidia.com/jseppanen/Automodel.git
+	url = ssh://git@gitlab-master.nvidia.com:12051/jseppanen/Automodel.git
 	branch = jseppanen/nano-v3-vl
 	shallow = true
 [submodule "3rdparty/Gym-workspace/Gym"]
