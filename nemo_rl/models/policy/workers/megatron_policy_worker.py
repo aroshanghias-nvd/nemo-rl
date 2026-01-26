@@ -1038,6 +1038,9 @@ class MegatronPolicyWorker(AbstractPolicyWorker, ColocatablePolicyInterface):
                     else:
                         cpu_item = item
                     self.reference_state_dict[name] = cpu_item
+                del reference_model
+                gc.collect()
+                torch.cuda.empty_cache()
                 print("Reference model loaded")
             else:
                 print("Reference model not loaded")
