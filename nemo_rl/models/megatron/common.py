@@ -477,7 +477,7 @@ def forward_step_arbitrary_loss(
         additional_kwargs["fp32_output"] = False
 
     with straggler_timer:
-        prepare_multimodal_data(multimodal_data, model)
+        prepare_multimodal_data(multimodal_data, model, input_ids_cp_sharded.device)
         output_tensor = model(
             input_ids=input_ids_cp_sharded,
             position_ids=position_ids,

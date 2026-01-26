@@ -255,9 +255,14 @@ def hf_data_processor(
 
         # make smaller and mask out
         for chat_message in message_log:
-            chat_message["token_ids"] = chat_message["token_ids"][
+            token_ids = chat_message["token_ids"][
                 : min(4, max_seq_length // len(message_log))
             ]
+            # Filter out image tokens since we're discarding images
+            image_token_id = getattr(processor, "image_token_id", None)
+            if image_token_id is not None:
+                token_ids = token_ids[token_ids != image_token_id]
+            chat_message["token_ids"] = token_ids
             for key, value in chat_message.items():
                 if isinstance(value, PackedTensor):
                     chat_message[key] = PackedTensor.empty_like(value)

@@ -1487,7 +1487,7 @@ class MegatronPolicyWorker(AbstractPolicyWorker, ColocatablePolicyInterface):
             if self.defer_fp32_logits:
                 additional_kwargs["fp32_output"] = False
 
-            prepare_multimodal_data(multimodal_data, model)
+            prepare_multimodal_data(multimodal_data, model, input_ids.device)
 
             output_tensor = model(
                 input_ids=input_ids_cp_sharded,
@@ -1746,7 +1746,7 @@ class MegatronPolicyWorker(AbstractPolicyWorker, ColocatablePolicyInterface):
             )
             if len(multimodal_data) > 0:
                 position_ids = None
-            prepare_multimodal_data(multimodal_data, model)
+            prepare_multimodal_data(multimodal_data, model, input_ids_cp_sharded.device)
 
             additional_kwargs = {}
             if packed_seq_params is not None:

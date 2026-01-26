@@ -98,9 +98,14 @@ def _get_image_token_ids(model) -> Optional[tuple[int, int]]:
     return None
 
 
-def prepare_multimodal_data(multimodal_data: dict, model) -> None:
+def prepare_multimodal_data(multimodal_data: dict, model, device: torch.device) -> None:
     """Prepare pixel_values for Megatron forward (patchification for dynamic resolution)."""
     if "pixel_values" not in multimodal_data:
+        # LLaVAModel requires images, imgs_sizes, and num_image_tiles; pass empty tensors
+        # num_image_tiles must be empty to match images count, even if input_ids has image tokens
+        multimodal_data["images"] = torch.empty(0, dtype=torch.bfloat16, device=device)
+        multimodal_data["imgs_sizes"] = torch.empty(0, 2, dtype=torch.int32, device=device)
+        multimodal_data["num_image_tiles"] = torch.empty(0, dtype=torch.int, device=device)
         return
 
     images = multimodal_data.pop("pixel_values").to(torch.bfloat16)

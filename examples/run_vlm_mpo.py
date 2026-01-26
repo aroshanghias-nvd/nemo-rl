@@ -239,6 +239,9 @@ def vlm_mpo_preprocessor(
             # for key, value in message.items():
             #     if isinstance(value, PackedTensor):
             #         message[key] = PackedTensor.empty_like(value)
+            # image_token_id = getattr(processor, "image_token_id", None)
+            # if image_token_id is not None:
+            #     message["token_ids"] = message["token_ids"][message["token_ids"] != image_token_id]
         for message in message_log_rejected:
             message["token_ids"] = message["token_ids"][
                 : min(4, max_seq_length // len(message_log_rejected))
@@ -247,6 +250,9 @@ def vlm_mpo_preprocessor(
             # for key, value in message.items():
             #     if isinstance(value, PackedTensor):
             #         message[key] = PackedTensor.empty_like(value)
+            # image_token_id = getattr(processor, "image_token_id", None)
+            # if image_token_id is not None:
+            #     message["token_ids"] = message["token_ids"][message["token_ids"] != image_token_id]
         loss_multiplier = 0.0
         length_chosen = sum(len(m["token_ids"]) for m in message_log_chosen)
         length_rejected = sum(len(m["token_ids"]) for m in message_log_rejected)

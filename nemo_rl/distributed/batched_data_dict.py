@@ -93,7 +93,9 @@ class BatchedDataDict(UserDict, Generic[DictT]):
         multimodal_dict = {}
         for k, v in self.data.items():
             if isinstance(v, PackedTensor):
-                multimodal_dict[k] = v.as_tensor(device=device) if as_tensors else v
+                value = v.as_tensor(device=device) if as_tensors else v
+                if value is not None:
+                    multimodal_dict[k] = value
             elif k in self.ADDITIONAL_OPTIONAL_KEY_TENSORS and v is not None:
                 if as_tensors and device is not None and isinstance(v, torch.Tensor):
                     multimodal_dict[k] = v.to(device)
