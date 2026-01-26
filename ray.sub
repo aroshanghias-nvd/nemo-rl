@@ -219,13 +219,6 @@ env
 # rm -rf /opt/ray_venvs || true
 export NCCL_DEBUG=INFO
 
-# FIXME(jseppanen): Override container's vllm with runtime submodule
-if [[ -d "$SLURM_SUBMIT_DIR/3rdparty/vllm" ]]; then
-    rm -rf /opt/nemo-rl/3rdparty/vllm 2>/dev/null || true
-    ln -sfn "$SLURM_SUBMIT_DIR/3rdparty/vllm" /opt/nemo-rl/3rdparty/vllm
-    echo "Linked vllm: /opt/nemo-rl/3rdparty/vllm -> $SLURM_SUBMIT_DIR/3rdparty/vllm"
-fi
-
 exit-dramatically() {
     # Use SIGTERM to forcefully terminate the srun process
     pkill -P $$ || true
@@ -334,13 +327,6 @@ env
 
 # rm -rf /opt/ray_venvs || true
 export NCCL_DEBUG=INFO
-
-# FIXME(jseppanen): Override container's vllm with runtime submodule
-if [[ -d "$SLURM_SUBMIT_DIR/3rdparty/vllm" ]]; then
-    rm -rf /opt/nemo-rl/3rdparty/vllm 2>/dev/null || true
-    ln -sfn "$SLURM_SUBMIT_DIR/3rdparty/vllm" /opt/nemo-rl/3rdparty/vllm
-    echo "Linked vllm: /opt/nemo-rl/3rdparty/vllm -> $SLURM_SUBMIT_DIR/3rdparty/vllm"
-fi
 
 exit-dramatically() {
     # Use SIGTERM to forcefully terminate the srun process
