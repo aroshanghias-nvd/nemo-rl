@@ -1489,8 +1489,14 @@ class MegatronPolicyWorker(AbstractPolicyWorker, ColocatablePolicyInterface):
 
             prepare_multimodal_data(multimodal_data, model, input_ids.device)
 
+            # For VLM (multimodal), pass full input_ids so LLaVA can correctly count
+            # image tokens in _preprocess_data(). LLaVA handles CP sharding internally
+            # via _process_embedding_token_parallel() after combining text+image embeddings.
+            is_vlm = len(multimodal_data) > 0
+            model_input_ids = input_ids if is_vlm else input_ids_cp_sharded
+
             output_tensor = model(
-                input_ids=input_ids_cp_sharded,
+                input_ids=model_input_ids,
                 position_ids=position_ids,
                 attention_mask=attention_mask,
                 **multimodal_data,
@@ -1746,22 +1752,33 @@ class MegatronPolicyWorker(AbstractPolicyWorker, ColocatablePolicyInterface):
             )
             if len(multimodal_data) > 0:
                 position_ids = None
-            prepare_multimodal_data(multimodal_data, model, input_ids_cp_sharded.device)
+            # For VLM (multimodal), pass full input_ids so LLaVA can correctly count
+            # image tokens in _preprocess_data(). LLaVA handles CP sharding internally
+            # via _process_embedding_token_parallel() after combining text+image embeddings.
+            is_vlm = len(multimodal_data) > 0
+            model_input_ids = input_ids_unpacked if (is_vlm and pack) else input_ids_cp_sharded
+            prepare_multimodal_data(multimodal_data, model, model_input_ids.device)
 
             additional_kwargs = {}
             if packed_seq_params is not None:
                 additional_kwargs["packed_seq_params"] = packed_seq_params
 
             output_tensor = model(
-                input_ids=input_ids_cp_sharded,
+                input_ids=model_input_ids,
                 position_ids=position_ids,
                 attention_mask=attention_mask,
                 **additional_kwargs,
                 **multimodal_data,
             )
 
-            assert output_tensor.shape[1] == original_seq_length, (
-                f"Model output length {output_tensor.shape[1]} != input length {original_seq_length}"
+            # For VLM with CP, output is sharded by LLaVA's _process_embedding_token_parallel()
+            cp_size = self.cfg["megatron_cfg"]["context_parallel_size"]
+            if is_vlm and cp_size > 1:
+                expected_length = original_seq_length // cp_size
+            else:
+                expected_length = original_seq_length
+            assert output_tensor.shape[1] == expected_length, (
+                f"Model output length {output_tensor.shape[1]} != expected length {expected_length}"
             )
             if "generation" in self.cfg and self.cfg["generation"] is not None:
                 output_tensor.div_(self.cfg["generation"]["temperature"])

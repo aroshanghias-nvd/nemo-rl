@@ -476,10 +476,16 @@ def forward_step_arbitrary_loss(
     if defer_fp32_logits:
         additional_kwargs["fp32_output"] = False
 
+    # For VLM (multimodal), pass full input_ids so LLaVA can correctly count
+    # image tokens in _preprocess_data(). LLaVA handles CP sharding internally
+    # via _process_embedding_token_parallel() after combining text+image embeddings.
+    is_vlm = len(multimodal_data) > 0
+    model_input_ids = input_ids if is_vlm else input_ids_cp_sharded
+
     with straggler_timer:
-        prepare_multimodal_data(multimodal_data, model, input_ids_cp_sharded.device)
+        prepare_multimodal_data(multimodal_data, model, model_input_ids.device)
         output_tensor = model(
-            input_ids=input_ids_cp_sharded,
+            input_ids=model_input_ids,
             position_ids=position_ids,
             attention_mask=attention_mask,
             **additional_kwargs,
@@ -506,10 +512,6 @@ def forward_step_arbitrary_loss(
                 cu_seqlens_q_padded=packed_seq_params.cu_seqlens_q_padded,
             )
 
-        if "pixel_values" in data_dict and pack_sequences:
-            raise NotImplementedError(
-                "Sequence packing is not yet supported for multimodal inputs."
-            )
         loss_data = data_dict
         loss_data["input_ids"] = original_input_ids
 
